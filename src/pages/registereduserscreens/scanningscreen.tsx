@@ -4,10 +4,6 @@ import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
 import Logo from "../../../assets/mobile.png";
 
-interface QRScanningProps {
-  onQRScanned: (sessionCode: string) => void;
-}
-
 const RegisteredUserScanningScreen: React.FC = () => {
   const navigate = useNavigate();
   const [qrBuffer, setQrBuffer] = useState("");

@@ -194,6 +194,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     calibrationAttempts: 0,
     compactorRunning: false,
     compactorTimer: null as NodeJS.Timeout | null,
+    resetting: false,
   });
 
   // ============================================
@@ -782,11 +783,32 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     }
   }, [config, executeCommand, delay, startSessionTimers, log]);
 
+  // 🔧 FIXED: Gate closes immediately on session end
   const resetSystemForNextUser = useCallback(async (forceStop: boolean = false) => {
     const state = stateRef.current;
     
     log('🔄 RESET SYSTEM', 'info');
     
+    // 🔧 Prevent multiple concurrent resets
+    if (state.resetting) {
+      log('⚠️ Reset already in progress, skipping duplicate', 'warn');
+      return null;
+    }
+    
+    state.resetting = true;
+    
+    // 🆕 FIX: Close gate IMMEDIATELY - before any waiting
+    log('🚪 Closing gate immediately (session ended)...', 'info');
+    try {
+      await executeCommand('closeGate');
+      await delay(config.timing.gateOperation);
+      log('✅ Gate closed - no more items can be inserted', 'success');
+    } catch (error: any) {
+      log(`❌ Gate closure error: ${error.message}`, 'error');
+    }
+    
+    // Stop accepting new items immediately
+    log('🛑 Stopping auto cycle and timers...', 'info');
     state.autoCycleEnabled = false;
     state.awaitingDetection = false;
     
@@ -794,36 +816,77 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       clearTimeout(state.autoPhotoTimer);
       state.autoPhotoTimer = null;
     }
+    log('✅ Auto operations stopped', 'success');
+    
+    // Wait for cycle completion if needed
+    if (state.cycleInProgress) {
+      log('⏳ Cycle in progress - waiting for completion...', 'info');
+      const maxWait = 60000;
+      const startWait = Date.now();
+      let attempts = 0;
+      
+      while (state.cycleInProgress && (Date.now() - startWait) < maxWait) {
+        await delay(2000);
+        attempts++;
+        const remainingTime = Math.ceil((maxWait - (Date.now() - startWait)) / 1000);
+        log(`⏱️  Attempt ${attempts}: Waiting... ${remainingTime}s remaining`, 'info');
+      }
+      
+      if (state.cycleInProgress) {
+        log('⚠️ Cycle timeout - forcing completion', 'warn');
+        state.cycleInProgress = false;
+      } else {
+        log('✅ Cycle completed', 'success');
+      }
+    }
     
     try {
+      // Handle compactor gracefully
       if (state.compactorRunning) {
         if (forceStop) {
+          // Emergency: Force stop immediately
+          log('🚨 FORCE STOPPING compactor (emergency)', 'warn');
           await executeCommand('customMotor', config.motors.compactor.stop);
           if (state.compactorTimer) {
             clearTimeout(state.compactorTimer);
             state.compactorTimer = null;
           }
           state.compactorRunning = false;
+          log('✅ Compactor force stopped', 'success');
         } else {
-          log('⏳ Waiting for compactor...', 'info');
-          const maxWait = config.timing.compactor + 2000;
+          // Normal session end: Wait for compactor to complete naturally
+          log('⏳ Waiting for compactor to complete last bottle...', 'info');
+          log('💡 Gate is already closed - safely finishing last item', 'info');
+          const maxWaitTime = config.timing.compactor + 2000;
           const startWait = Date.now();
-          while (state.compactorRunning && (Date.now() - startWait) < maxWait) {
+          
+          while (state.compactorRunning && (Date.now() - startWait) < maxWaitTime) {
             await delay(1000);
+            const remainingTime = Math.ceil((maxWaitTime - (Date.now() - startWait)) / 1000);
+            log(`⏱️  Compactor running... ${remainingTime}s remaining`, 'info');
           }
+          
           if (state.compactorRunning) {
+            log('⚠️ Compactor timeout - forcing stop', 'warn');
             await executeCommand('customMotor', config.motors.compactor.stop);
             if (state.compactorTimer) {
               clearTimeout(state.compactorTimer);
               state.compactorTimer = null;
             }
             state.compactorRunning = false;
+          } else {
+            log('✅ Compactor completed naturally', 'success');
           }
         }
       }
       
+      // Gate already closed above, but confirm it
+      log('🚪 Confirming gate is closed...', 'info');
       await executeCommand('closeGate');
       await delay(config.timing.gateOperation);
+      log('✅ Gate closure confirmed', 'success');
+      
+      log('🛑 Stopping all motors...', 'info');
       await executeCommand('customMotor', config.motors.belt.stop);
       
     } catch (error: any) {
@@ -857,7 +920,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     setStatus('ready');
     setStatusMessage('System ready');
     
-    log('✅ READY', 'success');
+    // Clear resetting flag
+    state.resetting = false;
+    
+    log('✅ READY FOR NEXT USER', 'success');
     
     return sessionSummary;
   }, [itemsProcessed, totalWeight, config, executeCommand, delay, clearSessionTimers, log]);
@@ -873,9 +939,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     try {
       setIsProcessing(true);
       setStatus('processing');
-      setStatusMessage('Ending session...');
+      setStatusMessage('Ending session - Gate closing...');
       
-      log('🏁 Ending session...', 'info');
+      log('🏁 Ending session - Gate will close immediately...', 'info');
       
       // Wait for any ongoing cycle to complete
       if (state.cycleInProgress) {
@@ -906,7 +972,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       if (data.success) {
         log(`✅ Session ended: ${data.summary.totalPoints} points`, 'success');
         
-        // Reset hardware
+        // Reset hardware (gate closes immediately inside this function)
         await resetSystemForNextUser(false);
         
         setIsProcessing(false);

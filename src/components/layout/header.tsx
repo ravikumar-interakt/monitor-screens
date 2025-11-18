@@ -1,4 +1,3 @@
-import React from 'react'
 import Logo from "../../../assets/image_1751568207796.png"
 
 const Header = () => {

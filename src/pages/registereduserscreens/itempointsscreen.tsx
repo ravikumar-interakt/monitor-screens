@@ -4,9 +4,9 @@ import Footer from '../../components/layout/footer';
 import { useNavigate } from 'react-router-dom';
 
 const ReBitCollectionScreen: React.FC = () => {
-  const [petBottles, setPetBottles] = useState(0);
-  const [aluminumCans, setAluminumCans] = useState(0);
-  const [steelCans, setSteelCans] = useState(0);
+  const [petBottles,] = useState(0);
+  const [aluminumCans, ] = useState(0);
+  const [steelCans,] = useState(0);
   const navigate=useNavigate();
 
   // Calculate total points (example: 1 point per item)
