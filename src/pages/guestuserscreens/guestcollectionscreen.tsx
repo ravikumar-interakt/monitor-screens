@@ -17,13 +17,14 @@ const ReBitGuestCollectionScreen: React.FC = () => {
     isProcessing,
     sessionActive,
     sessionCode,
+    isReady,
     startGuestSession,
     endSession,
   } = useRVMControl();
 
   // Start session when component mounts
   useEffect(() => {
-    if (!sessionStarted) {
+    if (isReady && !sessionStarted) {
       startGuestSessionFlow();
     }
 
