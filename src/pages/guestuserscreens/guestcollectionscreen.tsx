@@ -34,7 +34,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
         console.log("Component unmounting, session still active");
       }
     };
-  }, []);
+  }, [isReady,sessionStarted]);
 
   const startGuestSessionFlow = async () => {
     try {
