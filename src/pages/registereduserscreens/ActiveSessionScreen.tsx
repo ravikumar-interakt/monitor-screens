@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
-import { useRVMControl } from "../../hooks/useRVMControl";
+import { useRVM } from "../../contexts/RvmContext"; // ✅ Changed from useRVMControl
 
 interface LocationState {
   user: {
@@ -19,10 +19,10 @@ const ActiveSessionScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user } = (location.state as LocationState) || {};
 
-  // RVM Control Hook
+  // ✅ Use global RVM context - system is already ready
   const {
     status,
-    isReady,
+    // ✅ No isReady needed - system guaranteed ready
     itemsProcessed,
     totalWeight,
     totalPoints,
@@ -31,12 +31,12 @@ const ActiveSessionScreen: React.FC = () => {
     error,
     startSession,
     endSession,
-  } = useRVMControl();
+  } = useRVM(); // ✅ Changed from useRVMControl()
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
 
-  // Start session when component mounts
+  // ✅ Start session when component mounts - no isReady check needed
   useEffect(() => {
     if (!user) {
       // If no user data, redirect back to scanning
@@ -44,12 +44,13 @@ const ActiveSessionScreen: React.FC = () => {
       return;
     }
 
-    if (isReady && !sessionStarted) {
+    // ✅ Simplified - no isReady check needed
+    if (!sessionStarted) {
       console.log("🎬 Starting session for:", user.name || user.username);
       startSession(user);
       setSessionStarted(true);
     }
-  }, [isReady, user, navigate, startSession, sessionStarted]);
+  }, [user, navigate, startSession, sessionStarted]); // ✅ Removed isReady dependency
 
   // Handle session end
   const handleEndSession = async () => {

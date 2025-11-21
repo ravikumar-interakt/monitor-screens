@@ -2,12 +2,13 @@ import React, { useEffect, useState } from "react";
 import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
 import { useNavigate } from "react-router-dom";
-import { useRVMControl } from "../../hooks/useRVMControl";
+import { useRVM } from "../../contexts/RvmContext"; // ✅ Changed from useRVMControl
 
 const ReBitGuestCollectionScreen: React.FC = () => {
   const navigate = useNavigate();
   const [sessionStarted, setSessionStarted] = useState(false);
 
+  // ✅ Use global RVM context - system is already ready
   const {
     status,
     error,
@@ -17,14 +18,14 @@ const ReBitGuestCollectionScreen: React.FC = () => {
     isProcessing,
     sessionActive,
     sessionCode,
-    isReady,
+    // ✅ No isReady needed - system guaranteed ready
     startGuestSession,
     endSession,
-  } = useRVMControl();
+  } = useRVM(); // ✅ Changed from useRVMControl()
 
-  // Start session when component mounts
+  // ✅ Start session when component mounts - no isReady check needed
   useEffect(() => {
-    if (isReady && !sessionStarted) {
+    if (!sessionStarted) {
       startGuestSessionFlow();
     }
 
@@ -34,7 +35,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
         console.log("Component unmounting, session still active");
       }
     };
-  }, [isReady,sessionStarted]);
+  }, []); // ✅ Empty deps - runs once, no isReady needed
 
   const startGuestSessionFlow = async () => {
     try {
