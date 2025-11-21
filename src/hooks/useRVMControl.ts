@@ -1028,6 +1028,14 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     
     ws.onopen = () => {
       log('✅ WebSocket connected', 'success');
+      
+      // Request Module ID after connection is stable
+      setTimeout(() => {
+        if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+          log('📟 Connection stable - requesting Module ID...', 'info');
+          requestModuleId();
+        }
+      }, 500);
     };
     
     ws.onmessage = async (event) => {
@@ -1158,17 +1166,25 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   const requestModuleId = useCallback(async () => {
     try {
+      log('📡 Sending Module ID request...', 'info');
       await fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
         signal: AbortSignal.timeout(5000)
       });
-      log('📟 Module ID requested', 'info');
+      log('✅ Module ID request sent - awaiting response via WebSocket', 'info');
     } catch (error: any) {
       log(`❌ Module ID request failed: ${error.message}`, 'error');
+      // Retry if module ID not received
+      setTimeout(() => {
+        if (!moduleId) {
+          log('🔄 Retrying Module ID request...', 'info');
+          requestModuleId();
+        }
+      }, 2000);
     }
-  }, [config, log]);
+  }, [config, log, moduleId]); // ✅ Added moduleId to deps
 
   // ============================================
   // INITIALIZATION
@@ -1180,18 +1196,14 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     
     connectWebSocket();
     
-    const moduleIdTimer = setTimeout(() => {
-      requestModuleId();
-    }, 2000);
-    
     return () => {
-      clearTimeout(moduleIdTimer);
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
       clearSessionTimers();
     };
-  }, [connectWebSocket, requestModuleId, clearSessionTimers, log]);
+  }, []); // ✅ CRITICAL: Empty array - run once only!
 
   // ============================================
   // RETURN API
