@@ -150,7 +150,7 @@ const ActiveSessionScreen: React.FC = () => {
       <main className="flex-1 flex flex-col items-center px-12 py-8">
         <div className="w-full max-w-6xl">
           {/* Welcome Header */}
-          <div className="bg-gradient-to-r from-blue-500 to-purple-600 rounded-3xl shadow-lg p-8 mb-8">
+          <div className="bg-linear-to-r from-blue-500 to-purple-600 rounded-3xl shadow-lg p-8 mb-8">
             <h1 className="text-4xl font-bold text-white text-center mb-2">
               Welcome, {user?.name || user?.username || "User"}!
             </h1>
@@ -162,7 +162,7 @@ const ActiveSessionScreen: React.FC = () => {
           {/* Stats Cards */}
           <div className="grid grid-cols-3 gap-6 mb-8">
             {/* PET Bottles */}
-            <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-lg p-8 text-white">
+            <div className="bg-linear-to-br from-green-500 to-green-600 rounded-2xl shadow-lg p-8 text-white">
               <div className="text-center">
                 <div className="text-6xl font-bold mb-2">{itemCounts.pet}</div>
                 <div className="text-lg opacity-90 uppercase tracking-wide">
@@ -173,7 +173,7 @@ const ActiveSessionScreen: React.FC = () => {
             </div>
 
             {/* Aluminum Cans */}
-            <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg p-8 text-white">
+            <div className="bg-linear-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg p-8 text-white">
               <div className="text-center">
                 <div className="text-6xl font-bold mb-2">{itemCounts.aluminum}</div>
                 <div className="text-lg opacity-90 uppercase tracking-wide">
@@ -184,7 +184,7 @@ const ActiveSessionScreen: React.FC = () => {
             </div>
 
             {/* Total Weight */}
-            <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-2xl shadow-lg p-8 text-white">
+            <div className="bg-linear-to-br from-purple-500 to-purple-600 rounded-2xl shadow-lg p-8 text-white">
               <div className="text-center">
                 <div className="text-6xl font-bold mb-2">{totalWeight}g</div>
                 <div className="text-lg opacity-90 uppercase tracking-wide">

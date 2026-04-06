@@ -81,14 +81,16 @@ const SessionSummaryScreen: React.FC = () => {
           </div>
 
           {/* Environmental Impact Message */}
-          <div className="bg-gradient-to-r from-green-500 to-blue-500 rounded-2xl shadow-lg p-8 mb-12">
+          <div className="bg-linear-to-r from-green-500 to-blue-500 rounded-2xl shadow-lg p-8 mb-12">
             <div className="text-center text-white">
               <p className="text-2xl font-semibold mb-2">
                 🌍 Environmental Impact
               </p>
               <p className="text-xl opacity-90">
                 You've helped save approximately{" "}
-                <span className="font-bold">{Math.round(totalWeight / 10)}</span>{" "}
+                <span className="font-bold">
+                  {Math.round(totalWeight / 10)}
+                </span>{" "}
                 liters of water and reduced CO₂ emissions!
               </p>
             </div>
@@ -97,7 +99,7 @@ const SessionSummaryScreen: React.FC = () => {
           {/* Done Button */}
           <button
             onClick={handleDone}
-            className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white text-4xl font-bold py-8 rounded-2xl shadow-lg transition-all transform hover:scale-105"
+            className="w-full bg-linear-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white text-4xl font-bold py-8 rounded-2xl shadow-lg transition-all transform hover:scale-105"
           >
             Done
           </button>

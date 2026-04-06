@@ -9,9 +9,12 @@ import ReBitGuestCollectionScreen from "./pages/guestuserscreens/guestcollection
 import GuestPointsScreen from "./pages/guestuserscreens/guestpointsscreen";
 import ActiveSessionScreen from "./pages/registereduserscreens/ActiveSessionScreen";
 import SessionSummaryScreen from "./pages/registereduserscreens/SessionSummaryScreen";
+import {  RVMVideosContextProvider, useRVMVideos } from "./context/rvmvideoscontext";
 
 const App = () => {
+ 
   return (
+    <RVMVideosContextProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomeScreen />} />
@@ -38,6 +41,7 @@ const App = () => {
         <Route path="/guest-points-screen" element={<GuestPointsScreen />} />
       </Routes>
     </BrowserRouter>
+    </RVMVideosContextProvider>
   );
 };
 
