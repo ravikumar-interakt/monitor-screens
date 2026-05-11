@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import Logo from "../../../assets/image_1751568207796.png";
 import { keys } from "../../../src/config";
+import useDeviceId from "../../hooks/useDeviceId";
 
 interface Issue {
   id: string;
@@ -18,12 +19,13 @@ const Header = () => {
   const [loading, setLoading] = useState(false);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const deviceId=useDeviceId();
 
   const fetchIssuesList = async () => {
     try {
       setLoading(true);
       const response = await fetch(
-        `${keys?.base_url}api/rvm/RVM-3101/issues/list`
+        `${keys?.base_url}api/rvm/${deviceId}/issues/list`
       );
       const data = await response.json();
       setIssuesList(data?.data || []);
@@ -51,7 +53,7 @@ const Header = () => {
       setSelectedIssue(id);
 
       const response = await fetch(
-        `${keys?.base_url}/api/rvm/RVM-3101/issues/report`,
+        `${keys?.base_url}/api/rvm/${deviceId}/issues/report`,
         {
           method: "POST",
           headers: {

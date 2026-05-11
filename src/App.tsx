@@ -9,7 +9,7 @@ import ReBitGuestCollectionScreen from "./pages/guestuserscreens/guestcollection
 import GuestPointsScreen from "./pages/guestuserscreens/guestpointsscreen";
 import ActiveSessionScreen from "./pages/registereduserscreens/ActiveSessionScreen";
 import SessionSummaryScreen from "./pages/registereduserscreens/SessionSummaryScreen";
-import {  RVMVideosContextProvider, useRVMVideos } from "./context/rvmvideoscontext";
+import {  RVMVideosContextProvider} from "./context/rvmvideoscontext";
 
 const App = () => {
  

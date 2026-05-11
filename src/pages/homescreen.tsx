@@ -1,10 +1,11 @@
-import React, { use, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Footer from "../components/layout/footer";
 import Header from "../components/layout/header";
 import UserLogo from "../../assets/Illust.png";
 import { useRVMVideos } from "../context/rvmvideoscontext";
 import { keys } from "../config";
+import useDeviceId from "../hooks/useDeviceId";
 
 const HomeScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -20,12 +21,13 @@ const HomeScreen: React.FC = () => {
   };
 
   const { handleAddVideos } = useRVMVideos();
+  const deviceId=useDeviceId();
 
   useEffect(() => {
     const fetchRVMVideos = async () => {
       try {
         const response = await fetch(
-          `${keys?.base_url}/api/rvm/RVM-3101/monitor/videos`
+          `${keys?.base_url}/api/rvm/${deviceId}/monitor/videos`
         );
         const data = await response.json();
         setWaitingScreenVideo(data?.data?.waitingScreenVideo);
