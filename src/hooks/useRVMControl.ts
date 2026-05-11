@@ -45,6 +45,8 @@ export interface RVMConfig {
     retryDelay: number;
     maxRetries: number;
     minValidWeight: number;
+    minConfidenceRetry: number;
+    positionBeforePhoto: boolean;
   };
   timing: {
     beltToWeight: number;
@@ -52,11 +54,19 @@ export interface RVMConfig {
     beltReverse: number;
     stepperRotate: number;
     stepperReset: number;
-    compactor: number;
+    compactorIdleStop: number;
+    positionSettle: number;
     gateOperation: number;
     autoPhotoDelay: number;
     sessionTimeout: number;
     sessionMaxDuration: number;
+    weightDelay: number;
+    photoDelay: number;
+    calibrationDelay: number;
+    commandDelay: number;
+    resetHomeDelay: number;
+    itemDropDelay: number;
+    photoPositionDelay: number;
   };
   weight: {
     coefficients: { [key: number]: number };
@@ -88,75 +98,104 @@ export interface SessionSummary {
 }
 
 export interface ItemCounts {
-  materialName:string;
-  count:0
+  materialName: string;
+  count: number;
+}
+
+export interface BinStatus {
+  plastic: boolean;
+  metal: boolean;
+  right: boolean;
+  glass: boolean;
+}
+
+export interface DetectionStats {
+  totalAttempts: number;
+  firstTimeSuccess: number;
+  secondTimeSuccess: number;
+  thirdTimeSuccess: number;
+  failures: number;
+  averageRetries: number;
+  lastSuccessfulTiming: { retries: number; timestamp: string } | null;
+  positioningHelped: number;
 }
 
 export type RVMStatus = 'idle' | 'ready' | 'processing' | 'active' | 'rejecting' | 'error';
 
 // ============================================
 // DEFAULT CONFIGURATION
+// (Matches agent config — timings, thresholds, etc.)
 // ============================================
 const DEFAULT_CONFIG: RVMConfig = {
   device: {
-    id: 'RVM-3101'
+    id: 'RVM-3101',
   },
   backend: {
     url: 'https://app.rebit-japan.com',
     validateEndpoint: '/api/rvm/RVM-3101/qr/validate',
-    timeout: 10000
+    timeout: 8000,
   },
   local: {
     baseUrl: 'http://localhost:8081',
     wsUrl: 'ws://localhost:8081/websocket/qazwsx1234',
-    timeout: 10000
+    timeout: 8000,
   },
   motors: {
     belt: {
-      toWeight: { motorId: "02", type: "02" },
-      toStepper: { motorId: "02", type: "03" },
-      reverse: { motorId: "02", type: "01" },
-      stop: { motorId: "02", type: "00" }
+      toWeight: { motorId: '02', type: '02' },
+      toStepper: { motorId: '02', type: '03' },
+      reverse: { motorId: '02', type: '01' },
+      stop: { motorId: '02', type: '00' },
     },
     compactor: {
-      start: { motorId: "04", type: "01" },
-      stop: { motorId: "04", type: "00" }
+      start: { motorId: '04', type: '01' },
+      stop: { motorId: '04', type: '00' },
     },
     stepper: {
       moduleId: '09',
-      positions: { home: '01', metalCan: '02', plasticBottle: '03' }
-    }
+      positions: { home: '01', metalCan: '02', plasticBottle: '03' },
+    },
   },
   detection: {
-    METAL_CAN: 0.22,
-    PLASTIC_BOTTLE: 0.30,
-    GLASS: 0.25,
-    retryDelay: 2000,
-    maxRetries: 3,
-    minValidWeight: 5
+    METAL_CAN: 0.65,
+    PLASTIC_BOTTLE: 0.65,
+    GLASS: 0.65,
+    retryDelay: 1500,
+    maxRetries: 2,
+    minValidWeight: 2,
+    minConfidenceRetry: 0.50,
+    positionBeforePhoto: true,
   },
   timing: {
-    beltToWeight: 3000,
-    beltToStepper: 4000,
-    beltReverse: 5000,
-    stepperRotate: 4000,
-    stepperReset: 6000,
-    compactor: 24000,
-    gateOperation: 1000,
-    autoPhotoDelay: 5000,
-    sessionTimeout: 120000,
-    sessionMaxDuration: 600000
+    beltToWeight: 1800,
+    beltToStepper: 2200,
+    beltReverse: 3500,
+    stepperRotate: 2200,
+    stepperReset: 3000,
+    compactorIdleStop: 20000,
+    positionSettle: 200,
+    gateOperation: 600,
+    autoPhotoDelay: 2500,
+    sessionTimeout: 300000,
+    sessionMaxDuration: 600000,
+    weightDelay: 600,
+    photoDelay: 600,
+    calibrationDelay: 800,
+    commandDelay: 100,
+    resetHomeDelay: 1000,
+    itemDropDelay: 300,
+    photoPositionDelay: 100,
   },
   weight: {
-    coefficients: { 1: 988, 2: 942, 3: 942, 4: 942 }
-  }
+    coefficients: { 1: 988, 2: 942, 3: 942, 4: 942 },
+  },
 };
 
 // ============================================
 // CUSTOM HOOK
 // ============================================
 export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
-  // State
+  // ── Exposed state ──
   const [status, setStatus] = useState<RVMStatus>('idle');
   const [isReady, setIsReady] = useState(false);
   const [moduleId, setModuleId] = useState<string | null>(null);
@@ -170,17 +209,27 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const [statusMessage, setStatusMessage] = useState('Initializing...');
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [binStatus, setBinStatus] = useState<BinStatus>({
+    plastic: false,
+    metal: false,
+    right: false,
+    glass: false,
+  });
 
-  // Refs for timers and state that don't need to trigger re-renders
+  // ── Internal refs (no re-renders) ──
   const wsRef = useRef<WebSocket | null>(null);
+  const moduleIdRef = useRef<string | null>(null);
+  const itemsProcessedRef = useRef(0);
+  const totalWeightRef = useRef(0);
+
   const stateRef = useRef({
     sessionCode: null as string | null,
     currentUserId: null as string | null,
     isMemberSession: false,
     sessionStartTime: null as Date | null,
-    sessionTimeoutTimer: null as NodeJS.Timeout | null,
-    maxDurationTimer: null as NodeJS.Timeout | null,
-    autoPhotoTimer: null as NodeJS.Timeout | null,
+    sessionTimeoutTimer: null as ReturnType<typeof setTimeout> | null,
+    maxDurationTimer: null as ReturnType<typeof setTimeout> | null,
+    autoPhotoTimer: null as ReturnType<typeof setTimeout> | null,
     cycleInProgress: false,
     autoCycleEnabled: false,
     awaitingDetection: false,
@@ -188,63 +237,187 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     aiResult: null as any,
     weight: null as any,
     calibrationAttempts: 0,
-    compactorRunning: false,
-    compactorTimer: null as NodeJS.Timeout | null,
     resetting: false,
+    itemAlreadyPositioned: false,
+
+    // Continuous compactor (matches agent)
+    compactorRunning: false,
+    compactorTimer: null as ReturnType<typeof setTimeout> | null,
+    compactorIdleTimer: null as ReturnType<typeof setTimeout> | null,
+    lastItemTime: null as number | null,
+
+    // Bin status (matches agent)
+    binStatus: {
+      plastic: false,
+      metal: false,
+      right: false,
+      glass: false,
+    } as BinStatus,
+
+    // Cycle timing & detection stats (matches agent)
+    lastCycleTime: null as number | null,
+    averageCycleTime: null as number | null,
+    cycleCount: 0,
+    sessionCount: 0,
+    detectionStats: {
+      totalAttempts: 0,
+      firstTimeSuccess: 0,
+      secondTimeSuccess: 0,
+      thirdTimeSuccess: 0,
+      failures: 0,
+      averageRetries: 0,
+      lastSuccessfulTiming: null,
+      positioningHelped: 0,
+    } as DetectionStats,
   });
+
+  // Keep refs in sync with state
+  useEffect(() => { moduleIdRef.current = moduleId; }, [moduleId]);
 
   // ============================================
   // UTILITY FUNCTIONS
   // ============================================
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  const log = useCallback((message: string, type: 'info' | 'success' | 'error' | 'warn' = 'info') => {
+  const log = useCallback((message: string, type: 'info' | 'success' | 'error' | 'warn' | 'debug' | 'perf' | 'crusher' | 'camera' | 'detection' = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     console.log(`[${timestamp}] [${type.toUpperCase()}] ${message}`);
   }, []);
 
+  // ============================================
+  // CYCLE TIMING & DETECTION STATS (from agent)
+  // ============================================
+  const trackCycleTime = useCallback((startTime: number) => {
+    const s = stateRef.current;
+    const cycleTime = Date.now() - startTime;
+    s.lastCycleTime = cycleTime;
+    s.cycleCount++;
+
+    if (s.averageCycleTime === null) {
+      s.averageCycleTime = cycleTime;
+    } else {
+      s.averageCycleTime = (s.averageCycleTime * (s.cycleCount - 1) + cycleTime) / s.cycleCount;
+    }
+    log(`⏱️ Cycle time: ${cycleTime}ms (avg: ${Math.round(s.averageCycleTime)}ms)`, 'perf');
+  }, [log]);
+
+  const trackDetectionAttempt = useCallback((success: boolean, retryCount: number) => {
+    const stats = stateRef.current.detectionStats;
+    stats.totalAttempts++;
+
+    if (success) {
+      if (retryCount === 0) stats.firstTimeSuccess++;
+      else if (retryCount === 1) stats.secondTimeSuccess++;
+      else if (retryCount === 2) stats.thirdTimeSuccess++;
+
+      stats.lastSuccessfulTiming = {
+        retries: retryCount,
+        timestamp: new Date().toISOString(),
+      };
+    } else {
+      stats.failures++;
+    }
+
+    const totalRetries = (stats.secondTimeSuccess * 1) + (stats.thirdTimeSuccess * 2);
+    const successfulAttempts = stats.firstTimeSuccess + stats.secondTimeSuccess + stats.thirdTimeSuccess;
+
+    if (successfulAttempts > 0) {
+      stats.averageRetries = totalRetries / successfulAttempts;
+    }
+  }, []);
+
+  // ============================================
+  // MATERIAL TYPE DETECTION
+  // (Updated to match agent — new 0-pet / 1-can format)
+  // ============================================
   const determineMaterialType = useCallback((aiData: any): string => {
-    const className = (aiData.className || '').toLowerCase();
+    const className = (aiData.className || '').toLowerCase().trim();
     const probability = aiData.probability || 0;
-    
+
     let materialType = 'UNKNOWN';
     let threshold = 1.0;
     let hasStrongKeyword = false;
-    
-    if (className.includes('易拉罐') || className.includes('metal') || 
-        className.includes('can') || className.includes('铝')) {
+    let detectionFormat = 'unknown';
+
+    // ── New standard format (0-pet, 1-can) ──
+    if (className === '0-pet' || className.startsWith('0-pet')) {
+      materialType = 'PLASTIC_BOTTLE';
+      threshold = config.detection.PLASTIC_BOTTLE;
+      hasStrongKeyword = true;
+      detectionFormat = 'new_standard';
+    } else if (className === '1-can' || className.startsWith('1-can')) {
       materialType = 'METAL_CAN';
       threshold = config.detection.METAL_CAN;
-      hasStrongKeyword = className.includes('易拉罐') || className.includes('铝');
-    } 
-    else if (className.includes('pet') || className.includes('plastic') || 
-             className.includes('瓶') || className.includes('bottle')) {
+      hasStrongKeyword = true;
+      detectionFormat = 'new_standard';
+    }
+    // ── Variant formats ──
+    else if (/^0[-_\s]*(pet|plastic|bottle)/i.test(className)) {
+      materialType = 'PLASTIC_BOTTLE';
+      threshold = config.detection.PLASTIC_BOTTLE;
+      hasStrongKeyword = true;
+      detectionFormat = 'variant_format';
+    } else if (/^1[-_\s]*(can|metal|aluminum)/i.test(className)) {
+      materialType = 'METAL_CAN';
+      threshold = config.detection.METAL_CAN;
+      hasStrongKeyword = true;
+      detectionFormat = 'variant_format';
+    }
+    // ── Legacy Chinese format ──
+    else if (className.includes('易拉罐') || className.includes('铝')) {
+      materialType = 'METAL_CAN';
+      threshold = config.detection.METAL_CAN;
+      hasStrongKeyword = true;
+      detectionFormat = 'legacy_chinese';
+    } else if (className.includes('pet') || className.includes('瓶')) {
       materialType = 'PLASTIC_BOTTLE';
       threshold = config.detection.PLASTIC_BOTTLE;
       hasStrongKeyword = className.includes('pet');
-    } 
-    else if (className.includes('玻璃') || className.includes('glass')) {
+      detectionFormat = 'legacy_keyword';
+    } else if (className.includes('metal') || className.includes('can')) {
+      materialType = 'METAL_CAN';
+      threshold = config.detection.METAL_CAN;
+      hasStrongKeyword = false;
+      detectionFormat = 'legacy_keyword';
+    } else if (className.includes('plastic') || className.includes('bottle')) {
+      materialType = 'PLASTIC_BOTTLE';
+      threshold = config.detection.PLASTIC_BOTTLE;
+      hasStrongKeyword = false;
+      detectionFormat = 'legacy_keyword';
+    } else if (className.includes('玻璃') || className.includes('glass')) {
       materialType = 'GLASS';
       threshold = config.detection.GLASS;
       hasStrongKeyword = className.includes('玻璃');
+      detectionFormat = 'glass_detected';
     }
-    
+
     const confidencePercent = Math.round(probability * 100);
-    
-    if (materialType !== 'UNKNOWN' && probability < threshold) {
-      const relaxedThreshold = threshold * 0.3;
-      if (hasStrongKeyword && probability >= relaxedThreshold) {
-        log(`✅ ${materialType} detected via keyword (${confidencePercent}%)`, 'success');
-        return materialType;
-      }
-      log(`⚠️ ${materialType} confidence too low (${confidencePercent}%)`, 'warn');
+
+    if (probability < config.detection.minConfidenceRetry && materialType === 'UNKNOWN') {
       return 'UNKNOWN';
     }
-    
-    if (materialType !== 'UNKNOWN') {
-      log(`✅ ${materialType} detected (${confidencePercent}%)`, 'success');
+
+    if (materialType !== 'UNKNOWN' && probability < threshold) {
+      const relaxedThreshold = detectionFormat === 'new_standard' ? threshold * 0.70 : threshold * 0.80;
+
+      if (hasStrongKeyword && probability >= relaxedThreshold) {
+        log(`🎯 ${materialType} detected (${confidencePercent}% - keyword match)`, 'detection');
+        return materialType;
+      }
+
+      if (detectionFormat === 'new_standard' && probability >= 0.45) {
+        log(`🎯 ${materialType} detected (${confidencePercent}% - standard format)`, 'detection');
+        return materialType;
+      }
+
+      log(`❌ Low confidence: ${confidencePercent}%`, 'warn');
+      return 'UNKNOWN';
     }
-    
+
+    if (materialType !== 'UNKNOWN') {
+      log(`✅ ${materialType} detected (${confidencePercent}%)`, 'detection');
+    }
+
     return materialType;
   }, [config.detection, log]);
 
@@ -252,41 +425,39 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // BACKEND API CALLS
   // ============================================
   const recordItemToBackend = useCallback(async (itemData: ItemData) => {
-    const state = stateRef.current;
-    if (!state.sessionCode) {
+    const s = stateRef.current;
+    if (!s.sessionCode) {
       log('⚠️ No session code, skipping backend record', 'warn');
       return;
     }
 
     try {
       log(`📤 Recording item to backend: ${itemData.material}`, 'info');
-      
+
       const response = await fetch(
-        `${config.backend.url}/api/rvm/session/${state.sessionCode}/item`,
+        `${config.backend.url}/api/rvm/session/${s.sessionCode}/item`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             material: itemData.material,
             weight: itemData.weight,
-            confidence: itemData.confidence / 100 // Convert back to decimal
+            confidence: itemData.confidence / 100,
           }),
-          signal: AbortSignal.timeout(config.backend.timeout)
+          signal: AbortSignal.timeout(config.backend.timeout),
         }
       );
 
       const data = await response.json();
 
       if (data.success) {
-        log(`✅ Item recorded to backend: ${data.session.itemsProcessed} items, ${data.session.totalPoints} pts`, 'success');
-        
-        // Update total points from backend
+        log(`✅ Item recorded: ${data.session.itemsProcessed} items, ${data.session.totalPoints} pts`, 'success');
         setTotalPoints(data.session.totalPoints);
       } else {
         log(`❌ Backend record failed: ${data.error}`, 'error');
       }
-    } catch (error: any) {
-      log(`❌ Backend API error: ${error.message}`, 'error');
+    } catch (err: any) {
+      log(`❌ Backend API error: ${err.message}`, 'error');
     }
   }, [config.backend, log]);
 
@@ -295,30 +466,34 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ============================================
   const executeCommand = useCallback(async (action: string, params: any = {}) => {
     const deviceType = 1;
-    
-    if (!moduleId && action !== 'getModuleId') {
+    const currentModuleId = moduleIdRef.current;
+
+    if (!currentModuleId && action !== 'getModuleId') {
       throw new Error('Module ID not available');
     }
-    
+
     let apiUrl: string;
     let apiPayload: any;
-    
+
     switch (action) {
       case 'openGate':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
-        apiPayload = { moduleId, motorId: '01', type: '03', deviceType };
+        apiPayload = { moduleId: currentModuleId, motorId: '01', type: '03', deviceType };
+        log('🚪 Opening gate...', 'info');
         break;
       case 'closeGate':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
-        apiPayload = { moduleId, motorId: '01', type: '00', deviceType };
+        // Agent uses type '01' for close (not '00')
+        apiPayload = { moduleId: currentModuleId, motorId: '01', type: '01', deviceType };
+        log('🚪 Closing gate...', 'info');
         break;
       case 'getWeight':
         apiUrl = `${config.local.baseUrl}/system/serial/getWeight`;
-        apiPayload = { moduleId, type: '00' };
+        apiPayload = { moduleId: currentModuleId, type: '00' };
         break;
       case 'calibrateWeight':
         apiUrl = `${config.local.baseUrl}/system/serial/weightCalibration`;
-        apiPayload = { moduleId, type: '00' };
+        apiPayload = { moduleId: currentModuleId, type: '00' };
         break;
       case 'takePhoto':
         apiUrl = `${config.local.baseUrl}/system/camera/process`;
@@ -330,80 +505,194 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           moduleId: config.motors.stepper.moduleId,
           id: params.position,
           type: params.position,
-          deviceType
+          deviceType,
         };
         break;
       case 'customMotor':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
         apiPayload = {
-          moduleId,
+          moduleId: currentModuleId,
           motorId: params.motorId,
           type: params.type,
-          deviceType
+          deviceType,
         };
         break;
       default:
         throw new Error(`Unknown action: ${action}`);
     }
-    
-    log(`🔧 Executing: ${action}`, 'info');
-    
+
     try {
       await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(apiPayload),
-        signal: AbortSignal.timeout(config.local.timeout)
+        signal: AbortSignal.timeout(config.local.timeout),
       });
-      
-      if (action === 'takePhoto') await delay(1500);
-      if (action === 'getWeight') await delay(2000);
-      
-    } catch (error: any) {
-      log(`❌ ${action} failed: ${error.message}`, 'error');
-      throw error;
+
+      if (action === 'takePhoto') await delay(config.timing.photoDelay);
+      if (action === 'getWeight') await delay(config.timing.weightDelay);
+    } catch (err: any) {
+      log(`❌ ${action} failed: ${err.message}`, 'error');
+      throw err;
     }
-  }, [moduleId, config, log, delay]);
+  }, [config, log]);
 
   // ============================================
-  // COMPACTOR MANAGEMENT
+  // CONTINUOUS COMPACTOR MANAGEMENT (from agent)
   // ============================================
-  const startCompactor = useCallback(async () => {
-    const state = stateRef.current;
-    
-    if (state.compactorRunning) {
-      log('⏳ Waiting for compactor...', 'warn');
-      const startWait = Date.now();
-      while (state.compactorRunning && (Date.now() - startWait) < config.timing.compactor + 5000) {
-        await delay(500);
-      }
-      if (state.compactorRunning) {
-        await executeCommand('customMotor', config.motors.compactor.stop);
-        state.compactorRunning = false;
-      }
-    }
-    
-    log('🎯 Compactor starting (parallel)', 'info');
-    state.compactorRunning = true;
-    await executeCommand('customMotor', config.motors.compactor.start);
-    
-    if (state.compactorTimer) clearTimeout(state.compactorTimer);
-    
-    state.compactorTimer = setTimeout(async () => {
-      log('✅ Compactor finished', 'success');
+  const stopCompactor = useCallback(async () => {
+    const s = stateRef.current;
+    if (!s.compactorRunning) return;
+
+    try {
       await executeCommand('customMotor', config.motors.compactor.stop);
-      state.compactorRunning = false;
-      state.compactorTimer = null;
-    }, config.timing.compactor);
-  }, [config, executeCommand, delay, log]);
+      log('🔨 Compactor stopped', 'crusher');
+    } catch (err: any) {
+      log(`Compactor stop error: ${err.message}`, 'error');
+    }
+
+    s.compactorRunning = false;
+
+    if (s.compactorTimer) {
+      clearTimeout(s.compactorTimer);
+      s.compactorTimer = null;
+    }
+    if (s.compactorIdleTimer) {
+      clearTimeout(s.compactorIdleTimer);
+      s.compactorIdleTimer = null;
+    }
+  }, [config.motors.compactor, executeCommand, log]);
+
+  const resetCompactorIdleTimer = useCallback(() => {
+    const s = stateRef.current;
+
+    if (s.compactorIdleTimer) {
+      clearTimeout(s.compactorIdleTimer);
+    }
+
+    s.lastItemTime = Date.now();
+
+    s.compactorIdleTimer = setTimeout(async () => {
+      if (s.compactorRunning && s.autoCycleEnabled) {
+        log('🔨 No items detected - stopping compactor (idle)', 'crusher');
+        await stopCompactor();
+      }
+    }, config.timing.compactorIdleStop);
+  }, [config.timing.compactorIdleStop, stopCompactor, log]);
+
+  const startContinuousCompactor = useCallback(async () => {
+    const s = stateRef.current;
+
+    if (s.compactorIdleTimer) {
+      clearTimeout(s.compactorIdleTimer);
+      s.compactorIdleTimer = null;
+    }
+
+    if (s.compactorRunning) {
+      // Already running — just reset idle timer
+      resetCompactorIdleTimer();
+      return;
+    }
+
+    try {
+      await executeCommand('customMotor', config.motors.compactor.start);
+      s.compactorRunning = true;
+      s.lastItemTime = Date.now();
+      log('🔨 Compactor started', 'crusher');
+
+      resetCompactorIdleTimer();
+    } catch (err: any) {
+      log(`❌ Failed to start compactor: ${err.message}`, 'error');
+      s.compactorRunning = false;
+      throw err;
+    }
+  }, [config.motors.compactor, executeCommand, resetCompactorIdleTimer, log]);
 
   // ============================================
-  // REJECTION CYCLE
+  // SESSION TIMERS
+  // ============================================
+  const clearSessionTimers = useCallback(() => {
+    const s = stateRef.current;
+    if (s.sessionTimeoutTimer) {
+      clearTimeout(s.sessionTimeoutTimer);
+      s.sessionTimeoutTimer = null;
+    }
+    if (s.maxDurationTimer) {
+      clearTimeout(s.maxDurationTimer);
+      s.maxDurationTimer = null;
+    }
+  }, []);
+
+  // Forward-declared ref for functions that need mutual references
+  const scheduleNextPhotoRef = useRef<() => Promise<void>>();
+  const executeAutoCycleRef = useRef<() => Promise<void>>();
+  const executeRejectionCycleRef = useRef<() => Promise<void>>();
+  const resetSystemRef = useRef<(forceStop?: boolean) => Promise<SessionSummary | null>>();
+
+  // ── handleSessionTimeout ──
+  const handleSessionTimeout = useCallback(async (reason: string) => {
+    const s = stateRef.current;
+    log(`⏱️ Session timeout: ${reason}`, 'warn');
+
+    // Close gate immediately on timeout (agent pattern)
+    log('🚪 Closing gate immediately (timeout)', 'warn');
+    try {
+      await executeCommand('closeGate');
+      await delay(400);
+    } catch (err: any) {
+      log(`❌ Gate close error: ${err.message}`, 'error');
+    }
+    // Double-close safety
+    try {
+      await executeCommand('closeGate');
+      await delay(300);
+    } catch (_) { /* ignore */ }
+
+    s.autoCycleEnabled = false;
+    s.awaitingDetection = false;
+
+    if (s.autoPhotoTimer) {
+      clearTimeout(s.autoPhotoTimer);
+      s.autoPhotoTimer = null;
+    }
+
+    if (s.cycleInProgress) {
+      const maxWait = 60000;
+      const startWait = Date.now();
+      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
+        await delay(1000);
+      }
+    }
+
+    s.resetting = false;
+    await resetSystemRef.current?.(false);
+  }, [executeCommand, log]);
+
+  const resetInactivityTimer = useCallback(() => {
+    const s = stateRef.current;
+    if (s.sessionTimeoutTimer) clearTimeout(s.sessionTimeoutTimer);
+
+    s.sessionTimeoutTimer = setTimeout(() => {
+      handleSessionTimeout('inactivity');
+    }, config.timing.sessionTimeout);
+  }, [config.timing.sessionTimeout, handleSessionTimeout]);
+
+  const startSessionTimers = useCallback(() => {
+    const s = stateRef.current;
+    resetInactivityTimer();
+
+    if (s.maxDurationTimer) clearTimeout(s.maxDurationTimer);
+    s.maxDurationTimer = setTimeout(() => {
+      handleSessionTimeout('max_duration');
+    }, config.timing.sessionMaxDuration);
+  }, [config.timing.sessionMaxDuration, resetInactivityTimer, handleSessionTimeout]);
+
+  // ============================================
+  // REJECTION CYCLE (from agent)
   // ============================================
   const executeRejectionCycle = useCallback(async () => {
-    const state = stateRef.current;
-    
-    log('❌ REJECTION CYCLE', 'error');
+    const s = stateRef.current;
+    log('❌ Rejecting item - reversing belt', 'warn');
     setStatus('rejecting');
     setStatusMessage('Item rejected - unrecognized material');
     setIsProcessing(true);
@@ -412,357 +701,511 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       await executeCommand('customMotor', config.motors.belt.reverse);
       await delay(config.timing.beltReverse);
       await executeCommand('customMotor', config.motors.belt.stop);
-      log('✅ Item rejected', 'success');
-    } catch (error: any) {
-      log(`❌ Rejection error: ${error.message}`, 'error');
+
+      trackDetectionAttempt(false, s.detectionRetries);
+    } catch (err: any) {
+      log(`Rejection error: ${err.message}`, 'error');
     }
 
-    state.aiResult = null;
-    state.weight = null;
-    state.detectionRetries = 0;
-    state.awaitingDetection = false;
-    state.cycleInProgress = false;
+    s.aiResult = null;
+    s.weight = null;
+    s.detectionRetries = 0;
+    s.awaitingDetection = false;
+    s.cycleInProgress = false;
+    s.itemAlreadyPositioned = false;
     setIsProcessing(false);
 
-    if (state.autoCycleEnabled) {
+    if (s.autoCycleEnabled) {
       setStatus('ready');
       setStatusMessage('Ready for next item');
-      
-      await executeCommand('openGate');
-      await delay(config.timing.gateOperation);
-      
-      if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-      state.autoPhotoTimer = setTimeout(() => {
-        if (!state.cycleInProgress && !state.awaitingDetection) {
-          state.awaitingDetection = true;
-          executeCommand('takePhoto');
-        }
-      }, config.timing.autoPhotoDelay);
+      await scheduleNextPhotoRef.current?.();
     }
-  }, [config, executeCommand, delay, log]);
+  }, [config, executeCommand, trackDetectionAttempt, log]);
 
   // ============================================
-  // AUTO CYCLE
+  // AUTO CYCLE (from agent — with continuous
+  // compactor, cycle timing, early backend call)
   // ============================================
   const executeAutoCycle = useCallback(async () => {
-    const state = stateRef.current;
-    
-    if (!state.aiResult || !state.weight || state.weight.weight <= 1) {
-      state.cycleInProgress = false;
+    const s = stateRef.current;
+
+    if (!s.aiResult || !s.weight || s.weight.weight <= 1) {
+      s.cycleInProgress = false;
       setIsProcessing(false);
       return;
     }
 
-    const newItemsProcessed = itemsProcessed + 1;
-    const newTotalWeight = totalWeight + state.weight.weight;
-    
+    const cycleStartTime = Date.now();
+
+    // Use refs for accurate counts (avoids stale closure)
+    itemsProcessedRef.current += 1;
+    totalWeightRef.current += s.weight.weight;
+    const newItemsProcessed = itemsProcessedRef.current;
+    const newTotalWeight = totalWeightRef.current;
+
     setItemsProcessed(newItemsProcessed);
     setTotalWeight(newTotalWeight);
-    
+
+    trackDetectionAttempt(true, s.detectionRetries);
+
+    if (s.itemAlreadyPositioned && s.detectionRetries > 0) {
+      s.detectionStats.positioningHelped++;
+    }
+
     const itemData: ItemData = {
       itemNumber: newItemsProcessed,
-      material: state.aiResult.materialType,
-      weight: state.weight.weight,
-      confidence: state.aiResult.matchRate,
-      timestamp: new Date().toISOString()
+      material: s.aiResult.materialType,
+      weight: s.weight.weight,
+      confidence: s.aiResult.matchRate,
+      timestamp: new Date().toISOString(),
     };
-    
-    // Update item counts based on material type
+
+    // Update item counts
     setItemCounts(prev => {
-      const newCounts = { ...prev };
-      // if (itemData.material === 'PLASTIC_BOTTLE') {
-      //   newCounts.pet++;
-      // } else if (itemData.material === 'METAL_CAN') {
-      //   newCounts.aluminum++;
-      // } else if (itemData.material === 'GLASS') {
-      //   newCounts.steel++;
-      // }
-      setItemCounts(prev => ({
-        ...prev,
-        [itemData.material]: (prev[itemData?.material] || 0) + 1,
-      }));
-      return newCounts;
+      const idx = prev.findIndex(m => m.materialName === itemData.material);
+      if (idx !== -1) {
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], count: updated[idx].count + 1 };
+        return updated;
+      }
+      return prev;
     });
-    
-    log(`🤖 CYCLE #${newItemsProcessed}: ${itemData.material} ${itemData.weight}g`, 'info');
+
+    log(`⚡ Item #${newItemsProcessed}: ${itemData.material} (${itemData.weight}g)`, 'success');
     setStatus('processing');
     setStatusMessage(`Processing ${itemData.material}...`);
     setIsProcessing(true);
 
+    // Record to backend IMMEDIATELY (agent pattern — DB writes while motors run)
+    recordItemToBackend(itemData);
+
     try {
-      // Step 1: Belt to Stepper
+      // Start compactor (continuous mode)
+      await startContinuousCompactor();
+
+      // Belt to stepper
       await executeCommand('customMotor', config.motors.belt.toStepper);
       await delay(config.timing.beltToStepper);
       await executeCommand('customMotor', config.motors.belt.stop);
 
-      // Step 2: Rotate Stepper
-      const targetPosition = itemData.material === 'METAL_CAN' 
+      // Rotate stepper to target bin
+      const targetPosition = itemData.material === 'METAL_CAN'
         ? config.motors.stepper.positions.metalCan
         : config.motors.stepper.positions.plasticBottle;
       await executeCommand('stepperMotor', { position: targetPosition });
       await delay(config.timing.stepperRotate);
 
-      // Step 3: Reverse Belt
-      await executeCommand('customMotor', config.motors.belt.reverse);
-      await delay(config.timing.beltReverse);
-      await executeCommand('customMotor', config.motors.belt.stop);
+      // Item drop delay
+      await delay(config.timing.itemDropDelay);
 
-      // Step 4: Reset Stepper
+      // Reset idle timer (item just dropped)
+      resetCompactorIdleTimer();
+
+      // Return stepper home
       await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
       await delay(config.timing.stepperReset);
 
-      // Step 5: Start Compactor (parallel)
-      await startCompactor();
-
-      // Step 6: Record to backend
-      await recordItemToBackend(itemData);
+      trackCycleTime(cycleStartTime);
+      resetInactivityTimer();
 
       log(`✅ CYCLE COMPLETE #${newItemsProcessed}`, 'success');
-
-    } catch (error: any) {
-      log(`❌ Cycle error: ${error.message}`, 'error');
-      setError(error.message);
+    } catch (err: any) {
+      log(`❌ Cycle error: ${err.message}`, 'error');
+      setError(err.message);
     }
 
-    state.aiResult = null;
-    state.weight = null;
-    state.calibrationAttempts = 0;
-    state.cycleInProgress = false;
-    state.detectionRetries = 0;
-    state.awaitingDetection = false;
+    s.aiResult = null;
+    s.weight = null;
+    s.cycleInProgress = false;
+    s.detectionRetries = 0;
+    s.awaitingDetection = false;
+    s.itemAlreadyPositioned = false;
     setIsProcessing(false);
 
-    if (state.autoCycleEnabled) {
+    if (s.autoCycleEnabled) {
       setStatus('ready');
       setStatusMessage('Ready for next item');
-      
-      await executeCommand('openGate');
-      await delay(config.timing.gateOperation);
-      
-      if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-      state.autoPhotoTimer = setTimeout(() => {
-        if (!state.cycleInProgress && !state.awaitingDetection) {
-          state.awaitingDetection = true;
-          executeCommand('takePhoto');
+      await scheduleNextPhotoRef.current?.();
+    }
+  }, [config, executeCommand, startContinuousCompactor, resetCompactorIdleTimer,
+      recordItemToBackend, trackCycleTime, trackDetectionAttempt, resetInactivityTimer, log]);
+
+  // ============================================
+  // PHOTO DETECTION WITH POSITIONING
+  // (From agent — weight pre-check, belt
+  //  positioning, settle, then photo)
+  // ============================================
+  const scheduleNextPhotoWithPositioning = useCallback(async () => {
+    const s = stateRef.current;
+
+    if (s.autoPhotoTimer) {
+      clearTimeout(s.autoPhotoTimer);
+    }
+
+    s.autoPhotoTimer = setTimeout(async () => {
+      if (!s.autoCycleEnabled || s.cycleInProgress || s.awaitingDetection) return;
+
+      // Ensure belt is stopped before weight check
+      try {
+        await executeCommand('customMotor', config.motors.belt.stop);
+        await delay(config.timing.positionSettle);
+      } catch (err: any) {
+        log(`Belt pre-stop error: ${err.message}`, 'error');
+      }
+
+      log('🔍 Checking weight for item presence...', 'info');
+
+      try {
+        await executeCommand('getWeight');
+        await delay(config.timing.weightDelay);
+
+        if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
+          log(`⚖️ No item detected (weight: ${s.weight ? s.weight.weight + 'g' : 'null'}) - waiting...`, 'debug');
+          s.weight = null;
+
+          if (s.autoCycleEnabled) {
+            await scheduleNextPhotoRef.current?.();
+          }
+          return;
         }
-      }, config.timing.autoPhotoDelay);
-    }
-  }, [itemsProcessed, totalWeight, config, executeCommand, delay, startCompactor, recordItemToBackend, log]);
+
+        log(`✅ Item detected (${s.weight.weight}g) - proceeding to position`, 'success');
+        s.weight = null; // Clear — will re-measure after photo
+
+      } catch (err: any) {
+        log(`Weight check error: ${err.message}`, 'error');
+        if (s.autoCycleEnabled) {
+          await scheduleNextPhotoRef.current?.();
+        }
+        return;
+      }
+
+      s.awaitingDetection = true;
+      s.itemAlreadyPositioned = false;
+
+      try {
+        if (config.detection.positionBeforePhoto) {
+          // Stop belt + settle
+          log('🛑 Ensuring belt is stopped before positioning...', 'debug');
+          await executeCommand('customMotor', config.motors.belt.stop);
+          await delay(config.timing.positionSettle);
+
+          // Move to camera position
+          log('🔄 Moving belt to camera position...', 'info');
+          await executeCommand('customMotor', config.motors.belt.toWeight);
+          await delay(config.timing.beltToWeight);
+
+          // Stop + settle
+          await executeCommand('customMotor', config.motors.belt.stop);
+          await delay(config.timing.positionSettle);
+
+          s.itemAlreadyPositioned = true;
+          log('✅ Item positioned at camera', 'camera');
+        }
+
+        // Take photo
+        log('📸 Taking photo...', 'camera');
+        await executeCommand('takePhoto');
+        log('📸 Photo command sent - waiting for AI result...', 'camera');
+
+      } catch (err: any) {
+        log(`❌ Photo positioning error: ${err.message}`, 'error');
+        s.awaitingDetection = false;
+        s.itemAlreadyPositioned = false;
+        s.weight = null;
+
+        try {
+          await executeCommand('customMotor', config.motors.belt.stop);
+        } catch (_) { /* ignore */ }
+
+        if (s.autoCycleEnabled) {
+          await scheduleNextPhotoRef.current?.();
+        }
+      }
+    }, 500);
+  }, [config, executeCommand, log]);
+
+  // Keep refs updated for mutual recursion
+  useEffect(() => { scheduleNextPhotoRef.current = scheduleNextPhotoWithPositioning; },
+    [scheduleNextPhotoWithPositioning]);
+  useEffect(() => { executeAutoCycleRef.current = executeAutoCycle; },
+    [executeAutoCycle]);
+  useEffect(() => { executeRejectionCycleRef.current = executeRejectionCycle; },
+    [executeRejectionCycle]);
 
   // ============================================
-  // SESSION MANAGEMENT
+  // RESET SYSTEM (from agent — double gate-close,
+  // compactor wait, session end notify)
   // ============================================
-  const resetInactivityTimer = useCallback(() => {
-    const state = stateRef.current;
-    
-    if (state.sessionTimeoutTimer) clearTimeout(state.sessionTimeoutTimer);
-    state.sessionTimeoutTimer = setTimeout(() => {
-      handleSessionTimeout('inactivity');
-    }, config.timing.sessionTimeout);
-  }, [config.timing.sessionTimeout]);
+  const resetSystemForNextUser = useCallback(async (forceStop: boolean = false): Promise<SessionSummary | null> => {
+    const s = stateRef.current;
 
-  const startSessionTimers = useCallback(() => {
-    const state = stateRef.current;
-    
-    resetInactivityTimer();
-    
-    if (state.maxDurationTimer) clearTimeout(state.maxDurationTimer);
-    state.maxDurationTimer = setTimeout(() => {
-      handleSessionTimeout('max_duration');
-    }, config.timing.sessionMaxDuration);
-  }, [config.timing.sessionMaxDuration, resetInactivityTimer]);
+    log('🔄 RESET SYSTEM', 'info');
 
-  const clearSessionTimers = useCallback(() => {
-    const state = stateRef.current;
-    
-    if (state.sessionTimeoutTimer) {
-      clearTimeout(state.sessionTimeoutTimer);
-      state.sessionTimeoutTimer = null;
+    if (s.resetting) {
+      log('⚠️ Reset already in progress, skipping', 'warn');
+      return null;
     }
-    if (state.maxDurationTimer) {
-      clearTimeout(state.maxDurationTimer);
-      state.maxDurationTimer = null;
-    }
-  }, []);
 
-  const handleSessionTimeout = useCallback(async (reason: string) => {
-    const state = stateRef.current;
-    
-    log(`⏱️ SESSION TIMEOUT: ${reason}`, 'warn');
-    state.autoCycleEnabled = false;
-    state.awaitingDetection = false;
-    
-    if (state.autoPhotoTimer) {
-      clearTimeout(state.autoPhotoTimer);
-      state.autoPhotoTimer = null;
+    s.resetting = true;
+
+    // Close gate IMMEDIATELY — double-close for safety (agent pattern)
+    log('🚪 Closing gate immediately (session ended)...', 'info');
+    try {
+      await executeCommand('closeGate');
+      await delay(400);
+      log('✅ Gate close confirmed (attempt 1)', 'success');
+    } catch (err: any) {
+      log(`❌ Gate closure error: ${err.message}`, 'error');
     }
-    
-    if (state.cycleInProgress) {
-      log('⏳ Waiting for cycle...', 'info');
+    try {
+      await executeCommand('closeGate');
+      await delay(300);
+      log('✅ Gate close confirmed (attempt 2)', 'success');
+    } catch (_) { /* ignore */ }
+
+    // Stop accepting new items
+    s.autoCycleEnabled = false;
+    s.awaitingDetection = false;
+
+    if (s.autoPhotoTimer) {
+      clearTimeout(s.autoPhotoTimer);
+      s.autoPhotoTimer = null;
+    }
+
+    // Wait for cycle completion if needed
+    if (s.cycleInProgress) {
+      log('⏳ Cycle in progress - waiting...', 'info');
       const maxWait = 60000;
       const startWait = Date.now();
-      while (state.cycleInProgress && (Date.now() - startWait) < maxWait) {
-        await delay(1000);
+      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
+        await delay(2000);
+      }
+      if (s.cycleInProgress) {
+        log('⚠️ Cycle timeout - forcing completion', 'warn');
+        s.cycleInProgress = false;
       }
     }
-    
-    await resetSystemForNextUser(false);
-  }, [delay, log]);
 
+    try {
+      if (forceStop) {
+        await stopCompactor();
+      } else {
+        if (s.compactorRunning) {
+          log('⏳ Waiting for compactor to finish...', 'info');
+          await delay(2000);
+          await stopCompactor();
+        }
+      }
+
+      await executeCommand('customMotor', config.motors.belt.stop);
+    } catch (err: any) {
+      log(`❌ Reset error: ${err.message}`, 'error');
+    }
+
+    // Notify backend that session ended
+    if (s.sessionCode) {
+      try {
+        log(`📤 Notifying backend: Session ended (${s.sessionCode})`, 'info');
+        await fetch(`${config.backend.url}/api/rvm/local/session/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionCode: s.sessionCode,
+            deviceId: config.device.id,
+          }),
+          signal: AbortSignal.timeout(config.backend.timeout),
+        });
+        log('✅ Session end notification sent', 'success');
+      } catch (err: any) {
+        log(`⚠️ Session end notification error: ${err.message}`, 'warn');
+      }
+    }
+
+    const sessionSummary: SessionSummary = {
+      itemsProcessed: itemsProcessedRef.current,
+      totalWeight: totalWeightRef.current,
+      userId: s.currentUserId,
+      sessionCode: s.sessionCode,
+      duration: s.sessionStartTime ? Date.now() - s.sessionStartTime.getTime() : 0,
+    };
+
+    // Reset all internal state
+    s.aiResult = null;
+    s.weight = null;
+    s.currentUserId = null;
+    s.sessionCode = null;
+    s.sessionStartTime = null;
+    s.isMemberSession = false;
+    s.calibrationAttempts = 0;
+    s.detectionRetries = 0;
+    s.itemAlreadyPositioned = false;
+    s.lastItemTime = null;
+
+    clearSessionTimers();
+
+    // Reset exposed state
+    setSessionCode(null);
+    setCurrentUser(null);
+    setSessionActive(false);
+    setItemsProcessed(0);
+    setTotalWeight(0);
+    setTotalPoints(0);
+    setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
+    setStatus('ready');
+    setStatusMessage('System ready');
+
+    itemsProcessedRef.current = 0;
+    totalWeightRef.current = 0;
+
+    s.resetting = false;
+    s.sessionCount++;
+
+    log('✅ READY FOR NEXT USER', 'success');
+
+    return sessionSummary;
+  }, [config, executeCommand, stopCompactor, clearSessionTimers, log]);
+
+  // Keep ref updated
+  useEffect(() => { resetSystemRef.current = resetSystemForNextUser; },
+    [resetSystemForNextUser]);
+
+  // ============================================
+  // SESSION START (member)
+  // ============================================
   const startSession = useCallback(async (userData: UserData) => {
-    const state = stateRef.current;
-    
+    const s = stateRef.current;
+
     log(`🎬 SESSION START: ${userData.name || userData.userId}`, 'info');
-    
-    state.currentUserId = userData.userId;
-    state.sessionCode = userData.sessionCode;
-    state.isMemberSession = true;
-    state.autoCycleEnabled = true;
-    state.sessionStartTime = new Date();
-    state.detectionRetries = 0;
-    state.awaitingDetection = false;
-    
+
+    s.currentUserId = userData.userId;
+    s.sessionCode = userData.sessionCode;
+    s.isMemberSession = true;
+    s.autoCycleEnabled = true;
+    s.sessionStartTime = new Date();
+    s.detectionRetries = 0;
+    s.awaitingDetection = false;
+    s.itemAlreadyPositioned = false;
+
+    itemsProcessedRef.current = 0;
+    totalWeightRef.current = 0;
+
     setSessionCode(userData.sessionCode);
     setCurrentUser(userData);
     setSessionActive(true);
     setItemsProcessed(0);
     setTotalWeight(0);
     setTotalPoints(0);
-    setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
+    setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
     setStatus('active');
     setStatusMessage('Session active - Place your bottle');
-    
+
     startSessionTimers();
-    
-    log('🔧 Initializing...', 'info');
+
+    // Initialize hardware (agent pattern)
     await executeCommand('customMotor', config.motors.belt.stop);
-    
-    if (state.compactorRunning) {
-      await executeCommand('customMotor', config.motors.compactor.stop);
-      if (state.compactorTimer) {
-        clearTimeout(state.compactorTimer);
-        state.compactorTimer = null;
-      }
-      state.compactorRunning = false;
-    }
-    
+    await stopCompactor();
+
     await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
-    await delay(2000);
-    
-    log('⚖️ Calibrating...', 'info');
+    await delay(config.timing.resetHomeDelay);
+
     await executeCommand('calibrateWeight');
-    await delay(1500);
-    
-    log('🚪 Opening gate...', 'info');
+    await delay(config.timing.calibrationDelay);
+
     await executeCommand('openGate');
-    await delay(config.timing.gateOperation);
-    
+    await delay(config.timing.commandDelay);
+
     log('✅ Session active', 'success');
     setStatus('ready');
     setStatusMessage('Ready for item - Place your bottle');
-    
-    if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-    state.autoPhotoTimer = setTimeout(() => {
-      state.awaitingDetection = true;
-      executeCommand('takePhoto');
-    }, config.timing.autoPhotoDelay);
-  }, [config, executeCommand, delay, startSessionTimers, log]);
 
+    // Wait before first detection (agent waits 4s)
+    await delay(4000);
+    await scheduleNextPhotoWithPositioning();
+  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning, log]);
+
+  // ============================================
+  // GUEST SESSION START
+  // ============================================
   const startGuestSession = useCallback(async () => {
     try {
       setError(null);
       setStatus('active');
       setStatusMessage('Starting guest session...');
       setIsProcessing(true);
-  
+
       log('🎬 Starting GUEST session...', 'info');
-      
+
       const url = `${config.backend.url}/api/rvm/${config.device.id}/guest/start`;
       log(`📡 Calling: ${url}`, 'info');
-  
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
         },
-        signal: AbortSignal.timeout(config.backend.timeout)
+        signal: AbortSignal.timeout(config.backend.timeout),
       });
-  
-      log(`📡 Response status: ${response.status}`, 'info');
-      log(`📡 Response headers: ${JSON.stringify(Object.fromEntries(response.headers))}`, 'info');
-  
-      // Check if response is JSON
+
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         const textResponse = await response.text();
-        log(`❌ Non-JSON response: ${textResponse.substring(0, 200)}`, 'error');
-        throw new Error(`Server returned non-JSON response (${response.status}): ${textResponse.substring(0, 100)}`);
+        throw new Error(`Server returned non-JSON (${response.status}): ${textResponse.substring(0, 100)}`);
       }
-  
+
       const data = await response.json();
-      log(`📡 Response data: ${JSON.stringify(data)}`, 'info');
-  
+
       if (data.success) {
-        const state = stateRef.current;
-        
-        state.sessionCode = data.session.sessionCode;
-        state.currentUserId = null;
-        state.isMemberSession = false;
-        state.autoCycleEnabled = true;
-        state.sessionStartTime = new Date();
-        state.detectionRetries = 0;
-        state.awaitingDetection = false;
-        
+        const s = stateRef.current;
+
+        s.sessionCode = data.session.sessionCode;
+        s.currentUserId = null;
+        s.isMemberSession = false;
+        s.autoCycleEnabled = true;
+        s.sessionStartTime = new Date();
+        s.detectionRetries = 0;
+        s.awaitingDetection = false;
+        s.itemAlreadyPositioned = false;
+
+        itemsProcessedRef.current = 0;
+        totalWeightRef.current = 0;
+
         setSessionCode(data.session.sessionCode);
         setSessionActive(true);
         setItemsProcessed(0);
         setTotalWeight(0);
         setTotalPoints(0);
-        // setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
-        setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
-        
+        setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
+
         log(`✅ Guest session created: ${data.session.sessionCode}`, 'success');
-        
+
         startSessionTimers();
-        
-        // Initialize hardware
-        log('🔧 Initializing hardware...', 'info');
+
+        // Initialize hardware (agent pattern)
         await executeCommand('customMotor', config.motors.belt.stop);
-        
-        if (state.compactorRunning) {
-          await executeCommand('customMotor', config.motors.compactor.stop);
-          if (state.compactorTimer) {
-            clearTimeout(state.compactorTimer);
-            state.compactorTimer = null;
-          }
-          state.compactorRunning = false;
-        }
-        
+        await stopCompactor();
+
         await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
-        await delay(2000);
-        
-        log('⚖️ Calibrating weight...', 'info');
+        await delay(config.timing.resetHomeDelay);
+
         await executeCommand('calibrateWeight');
-        await delay(1500);
-        
-        log('🚪 Opening gate...', 'info');
+        await delay(config.timing.calibrationDelay);
+
         await executeCommand('openGate');
-        await delay(config.timing.gateOperation);
-        
+        await delay(config.timing.commandDelay);
+
         setStatus('ready');
         setStatusMessage('Ready - Place your recyclables');
         setIsProcessing(false);
-        
-        // Start auto detection
-        if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-        state.autoPhotoTimer = setTimeout(() => {
-          state.awaitingDetection = true;
-          executeCommand('takePhoto');
-        }, config.timing.autoPhotoDelay);
-        
+
+        // Wait before first detection (agent waits 4s)
+        log('⏳ Waiting 4 seconds for first item...', 'info');
+        await delay(4000);
+        await scheduleNextPhotoWithPositioning();
+
         log('✅ Guest session ready', 'success');
-        
+
         return {
           success: true,
           sessionCode: data.session.sessionCode,
@@ -779,161 +1222,17 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       setError(errorMsg);
       setIsProcessing(false);
       log(`❌ Guest session error: ${errorMsg}`, 'error');
-      console.error('Full error:', err);
       return { success: false, error: errorMsg };
     }
-  }, [config, executeCommand, delay, startSessionTimers, log]);
+  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning, log]);
 
-  // 🔧 FIXED: Gate closes immediately on session end
-  const resetSystemForNextUser = useCallback(async (forceStop: boolean = false) => {
-    const state = stateRef.current;
-    
-    log('🔄 RESET SYSTEM', 'info');
-    
-    // 🔧 Prevent multiple concurrent resets
-    if (state.resetting) {
-      log('⚠️ Reset already in progress, skipping duplicate', 'warn');
-      return null;
-    }
-    
-    state.resetting = true;
-    
-    // 🆕 FIX: Close gate IMMEDIATELY - before any waiting
-    log('🚪 Closing gate immediately (session ended)...', 'info');
-    try {
-      await executeCommand('closeGate');
-      await delay(config.timing.gateOperation);
-      log('✅ Gate closed - no more items can be inserted', 'success');
-    } catch (error: any) {
-      log(`❌ Gate closure error: ${error.message}`, 'error');
-    }
-    
-    // Stop accepting new items immediately
-    log('🛑 Stopping auto cycle and timers...', 'info');
-    state.autoCycleEnabled = false;
-    state.awaitingDetection = false;
-    
-    if (state.autoPhotoTimer) {
-      clearTimeout(state.autoPhotoTimer);
-      state.autoPhotoTimer = null;
-    }
-    log('✅ Auto operations stopped', 'success');
-    
-    // Wait for cycle completion if needed
-    if (state.cycleInProgress) {
-      log('⏳ Cycle in progress - waiting for completion...', 'info');
-      const maxWait = 60000;
-      const startWait = Date.now();
-      let attempts = 0;
-      
-      while (state.cycleInProgress && (Date.now() - startWait) < maxWait) {
-        await delay(2000);
-        attempts++;
-        const remainingTime = Math.ceil((maxWait - (Date.now() - startWait)) / 1000);
-        log(`⏱️  Attempt ${attempts}: Waiting... ${remainingTime}s remaining`, 'info');
-      }
-      
-      if (state.cycleInProgress) {
-        log('⚠️ Cycle timeout - forcing completion', 'warn');
-        state.cycleInProgress = false;
-      } else {
-        log('✅ Cycle completed', 'success');
-      }
-    }
-    
-    try {
-      // Handle compactor gracefully
-      if (state.compactorRunning) {
-        if (forceStop) {
-          // Emergency: Force stop immediately
-          log('🚨 FORCE STOPPING compactor (emergency)', 'warn');
-          await executeCommand('customMotor', config.motors.compactor.stop);
-          if (state.compactorTimer) {
-            clearTimeout(state.compactorTimer);
-            state.compactorTimer = null;
-          }
-          state.compactorRunning = false;
-          log('✅ Compactor force stopped', 'success');
-        } else {
-          // Normal session end: Wait for compactor to complete naturally
-          log('⏳ Waiting for compactor to complete last bottle...', 'info');
-          log('💡 Gate is already closed - safely finishing last item', 'info');
-          const maxWaitTime = config.timing.compactor + 2000;
-          const startWait = Date.now();
-          
-          while (state.compactorRunning && (Date.now() - startWait) < maxWaitTime) {
-            await delay(1000);
-            const remainingTime = Math.ceil((maxWaitTime - (Date.now() - startWait)) / 1000);
-            log(`⏱️  Compactor running... ${remainingTime}s remaining`, 'info');
-          }
-          
-          if (state.compactorRunning) {
-            log('⚠️ Compactor timeout - forcing stop', 'warn');
-            await executeCommand('customMotor', config.motors.compactor.stop);
-            if (state.compactorTimer) {
-              clearTimeout(state.compactorTimer);
-              state.compactorTimer = null;
-            }
-            state.compactorRunning = false;
-          } else {
-            log('✅ Compactor completed naturally', 'success');
-          }
-        }
-      }
-      
-      // Gate already closed above, but confirm it
-      log('🚪 Confirming gate is closed...', 'info');
-      await executeCommand('closeGate');
-      await delay(config.timing.gateOperation);
-      log('✅ Gate closure confirmed', 'success');
-      
-      log('🛑 Stopping all motors...', 'info');
-      await executeCommand('customMotor', config.motors.belt.stop);
-      
-    } catch (error: any) {
-      log(`❌ Reset error: ${error.message}`, 'error');
-    }
-    
-    const sessionSummary: SessionSummary = {
-      itemsProcessed,
-      totalWeight,
-      userId: state.currentUserId,
-      sessionCode: state.sessionCode,
-      duration: state.sessionStartTime ? Date.now() - state.sessionStartTime.getTime() : 0
-    };
-    
-    state.aiResult = null;
-    state.weight = null;
-    state.currentUserId = null;
-    state.sessionCode = null;
-    state.sessionStartTime = null;
-    state.isMemberSession = false;
-    
-    clearSessionTimers();
-    
-    setSessionCode(null);
-    setCurrentUser(null);
-    setSessionActive(false);
-    setItemsProcessed(0);
-    setTotalWeight(0);
-    setTotalPoints(0);
-    // setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
-    setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
-    setStatus('ready');
-    setStatusMessage('System ready');
-    
-    // Clear resetting flag
-    state.resetting = false;
-    
-    log('✅ READY FOR NEXT USER', 'success');
-    
-    return sessionSummary;
-  }, [itemsProcessed, totalWeight, config, executeCommand, delay, clearSessionTimers, log]);
-
+  // ============================================
+  // END SESSION
+  // ============================================
   const endSession = useCallback(async () => {
-    const state = stateRef.current;
-    
-    if (!state.sessionCode) {
+    const s = stateRef.current;
+
+    if (!s.sessionCode) {
       log('⚠️ No active session to end', 'warn');
       return { success: false, error: 'No active session' };
     }
@@ -942,15 +1241,33 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       setIsProcessing(true);
       setStatus('processing');
       setStatusMessage('Ending session - Gate closing...');
-      
-      log('🏁 Ending session - Gate will close immediately...', 'info');
-      
-      // Wait for any ongoing cycle to complete
-      if (state.cycleInProgress) {
+
+      log('🏁 Ending session...', 'info');
+
+      // Stop auto operations immediately
+      s.autoCycleEnabled = false;
+      s.awaitingDetection = false;
+      if (s.autoPhotoTimer) {
+        clearTimeout(s.autoPhotoTimer);
+        s.autoPhotoTimer = null;
+      }
+
+      // Double gate-close immediately (agent pattern)
+      try {
+        await executeCommand('closeGate');
+        await delay(400);
+      } catch (_) { /* ignore */ }
+      try {
+        await executeCommand('closeGate');
+        await delay(400);
+      } catch (_) { /* ignore */ }
+
+      // Wait for any ongoing cycle
+      if (s.cycleInProgress) {
         log('⏳ Waiting for cycle to complete...', 'info');
         const maxWait = 60000;
         const startWait = Date.now();
-        while (state.cycleInProgress && (Date.now() - startWait) < maxWait) {
+        while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
           await delay(1000);
         }
       }
@@ -962,201 +1279,226 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sessionCode: state.sessionCode,
+            sessionCode: s.sessionCode,
             deviceId: config.device.id,
           }),
-          signal: AbortSignal.timeout(config.backend.timeout)
+          signal: AbortSignal.timeout(config.backend.timeout),
         }
       );
 
       const data = await response.json();
 
       if (data.success) {
-        log(`✅ Session ended: ${data.summary.totalPoints} points`, 'success');
-        
-        // Reset hardware (gate closes immediately inside this function)
+        log(`✅ Session ended: ${data.summary?.totalPoints || 0} points`, 'success');
+
+        // Reset hardware
+        s.resetting = false; // Ensure no lock
         await resetSystemForNextUser(false);
-        
+
         setIsProcessing(false);
-        
+
         return {
           success: true,
-          qrCode: data.qrCode, // QR code from backend (for guest sessions)
+          qrCode: data.qrCode,
           summary: data.summary,
           message: data.message,
         };
       } else {
         setError(data.error || 'Failed to end session');
         setIsProcessing(false);
-        log(`❌ End session failed: ${data.error}`, 'error');
         return { success: false, error: data.error };
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Network error';
       setError(errorMsg);
       setIsProcessing(false);
-      log(`❌ End session error: ${errorMsg}`, 'error');
       return { success: false, error: errorMsg };
     }
-  }, [config, delay, resetSystemForNextUser, log]);
+  }, [config, executeCommand, resetSystemForNextUser, log]);
 
+  // ============================================
+  // EMERGENCY STOP
+  // ============================================
   const emergencyStop = useCallback(async () => {
-    const state = stateRef.current;
-    
+    const s = stateRef.current;
     log('🚨 EMERGENCY STOP', 'error');
-    state.autoCycleEnabled = false;
-    state.cycleInProgress = false;
-    
+
+    s.autoCycleEnabled = false;
+    s.cycleInProgress = false;
+
     await executeCommand('closeGate');
     await executeCommand('customMotor', config.motors.belt.stop);
-    
-    if (state.compactorRunning) {
-      await executeCommand('customMotor', config.motors.compactor.stop);
-      state.compactorRunning = false;
-    }
-    
+    await stopCompactor();
+
+    s.resetting = false;
+
     setStatus('error');
     setStatusMessage('Emergency stop activated');
-  }, [config, executeCommand, log]);
+  }, [config, executeCommand, stopCompactor, log]);
 
   // ============================================
   // WEBSOCKET
+  // (Updated to match agent's WS handler flow)
   // ============================================
   const connectWebSocket = useCallback(() => {
     log('🔌 Connecting WebSocket...', 'info');
-    
+
     const ws = new WebSocket(config.local.wsUrl);
     wsRef.current = ws;
-    
+
     ws.onopen = () => {
       log('✅ WebSocket connected', 'success');
     };
-    
+
     ws.onmessage = async (event) => {
       try {
-        const message = JSON.parse(event.data);
-        const state = stateRef.current;
-        
-        // Module ID
+        const message = JSON.parse(event.data as string);
+        const s = stateRef.current;
+
+        // ── Module ID ──
         if (message.function === '01') {
           setModuleId(message.moduleId);
+          moduleIdRef.current = message.moduleId;
           setIsReady(true);
           setStatus('ready');
           setStatusMessage('System ready');
           log(`📟 Module ID: ${message.moduleId}`, 'info');
           return;
         }
-        
-        // AI Photo Result
+
+        // ── AI Photo Result ──
         if (message.function === 'aiPhoto') {
           const aiData = JSON.parse(message.data);
           const materialType = determineMaterialType(aiData);
-          
-          state.aiResult = {
+
+          s.aiResult = {
             matchRate: Math.round((aiData.probability || 0) * 100),
-            materialType: materialType,
+            materialType,
             className: aiData.className,
-            timestamp: new Date().toISOString()
+            taskId: aiData.taskId,
+            timestamp: new Date().toISOString(),
           };
-          
-          log(`🤖 AI: ${materialType} (${state.aiResult.matchRate}%)`, 'info');
-          
-          if (state.autoCycleEnabled && state.awaitingDetection) {
-            if (state.aiResult.materialType !== 'UNKNOWN') {
-              state.detectionRetries = 0;
-              state.awaitingDetection = false;
-              setTimeout(() => executeCommand('getWeight'), 500);
-            } else {
-              state.detectionRetries++;
-              if (state.detectionRetries < config.detection.maxRetries) {
-                setTimeout(() => executeCommand('takePhoto'), config.detection.retryDelay);
-              } else {
-                state.awaitingDetection = false;
-                state.cycleInProgress = true;
-                setTimeout(() => executeRejectionCycle(), 1000);
+
+          log(`🤖 AI: ${materialType} (${s.aiResult.matchRate}%)`, 'info');
+
+          // Agent flow: after AI result, always go to weight measurement
+          // (UNKNOWN detection + rejection happens after weight is received)
+          if (s.autoCycleEnabled && s.awaitingDetection) {
+            s.awaitingDetection = false;
+            log('🔍 AI detection complete - measuring weight...', 'detection');
+            setTimeout(() => executeCommand('getWeight'), 300);
+          }
+          return;
+        }
+
+        // ── Weight Result ──
+        if (message.function === '06') {
+          const weightValue = parseFloat(message.data) || 0;
+          const coefficient = config.weight.coefficients[1];
+          const calibratedWeight = weightValue * (coefficient / 1000);
+
+          s.weight = {
+            weight: Math.round(calibratedWeight * 10) / 10,
+            rawWeight: weightValue,
+            coefficient,
+            timestamp: new Date().toISOString(),
+          };
+
+          log(`⚖️ Weight: ${s.weight.weight}g`, 'info');
+
+          // Calibration retry for zero weight
+          if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
+            s.calibrationAttempts++;
+            setTimeout(async () => {
+              await executeCommand('calibrateWeight');
+              setTimeout(() => executeCommand('getWeight'), config.timing.calibrationDelay);
+            }, 500);
+            return;
+          }
+          if (s.weight.weight > 0) s.calibrationAttempts = 0;
+
+          // Agent flow: handle detection result + weight together
+          if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
+            log(`⚖️ Final weight: ${s.weight.weight}g`, 'info');
+
+            // Too light — no real item
+            if (s.weight.weight < config.detection.minValidWeight) {
+              log('⚠️ Weight too low after photo - skipping', 'warn');
+              s.aiResult = null;
+              s.weight = null;
+              s.itemAlreadyPositioned = false;
+              await scheduleNextPhotoRef.current?.();
+              return;
+            }
+
+            // Unknown material — reject
+            if (s.aiResult.materialType === 'UNKNOWN') {
+              log('❌ Unknown material - rejecting', 'warn');
+              s.cycleInProgress = true;
+              setTimeout(() => executeRejectionCycleRef.current?.(), 500);
+              return;
+            }
+
+            // Valid detection + valid weight — start cycle
+            log('✅ Starting auto cycle...', 'success');
+            s.cycleInProgress = true;
+            setTimeout(() => executeAutoCycleRef.current?.(), 500);
+          }
+          return;
+        }
+
+        // ── Device Status / Bin Status ──
+        if (message.function === 'deviceStatus') {
+          const binCode = parseInt(message.data);
+
+          const binStatusMap: Record<number, { name: string; key: keyof BinStatus | null; critical: boolean; isObjectSensor?: boolean }> = {
+            0: { name: 'Plastic (PET)', key: 'plastic', critical: true },
+            1: { name: 'Metal Can', key: 'metal', critical: true },
+            2: { name: 'Right Bin', key: 'right', critical: false },
+            3: { name: 'Glass', key: 'glass', critical: false },
+            4: { name: 'Infrared Sensor', key: null, critical: false, isObjectSensor: true },
+          };
+
+          const binInfo = binStatusMap[binCode];
+
+          if (binInfo) {
+            if (binInfo.isObjectSensor) return; // Sensor disabled
+
+            log(`⚠️ ${binInfo.name} bin full`, 'warn');
+
+            if (binInfo.key) {
+              s.binStatus[binInfo.key] = true;
+              setBinStatus({ ...s.binStatus });
+
+              // If the full bin matches the current item's target, end session
+              if (binInfo.critical && s.autoCycleEnabled) {
+                const currentMaterialBin: keyof BinStatus | null =
+                  s.aiResult?.materialType === 'METAL_CAN' ? 'metal' : 'plastic';
+
+                if (binInfo.key === currentMaterialBin) {
+                  setTimeout(async () => {
+                    await handleSessionTimeout('bin_full');
+                  }, 2000);
+                }
               }
             }
           }
           return;
         }
-        
-        // Weight Result
-        if (message.function === '06') {
-          const weightValue = parseFloat(message.data) || 0;
-          const coefficient = config.weight.coefficients[1];
-          const calibratedWeight = weightValue * (coefficient / 1000);
-          
-          state.weight = {
-            weight: Math.round(calibratedWeight * 10) / 10,
-            rawWeight: weightValue,
-            timestamp: new Date().toISOString()
-          };
-          
-          log(`⚖️ ${state.weight.weight}g`, 'info');
-          
-          if (state.weight.weight <= 0 && state.calibrationAttempts < 2) {
-            state.calibrationAttempts++;
-            setTimeout(async () => {
-              await executeCommand('calibrateWeight');
-              setTimeout(() => executeCommand('getWeight'), 1000);
-            }, 500);
-            return;
-          }
-          
-          if (state.weight.weight > 0) state.calibrationAttempts = 0;
-          
-          if (state.autoCycleEnabled && state.aiResult && !state.cycleInProgress) {
-            if (state.weight.weight < config.detection.minValidWeight) {
-              log(`⚠️ Weight too low: ${state.weight.weight}g`, 'warn');
-              state.aiResult = null;
-              state.weight = null;
-              state.awaitingDetection = false;
-              
-              if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-              state.autoPhotoTimer = setTimeout(() => {
-                if (!state.cycleInProgress && !state.awaitingDetection) {
-                  state.awaitingDetection = true;
-                  executeCommand('takePhoto');
-                }
-              }, config.timing.autoPhotoDelay);
-              return;
-            }
-            
-            state.cycleInProgress = true;
-            setTimeout(() => executeAutoCycle(), 1000);
-          }
-          return;
-        }
-        
-        // Device Status
-        if (message.function === 'deviceStatus') {
-          const code = parseInt(message.data) || -1;
-          if (code >= 0 && code <= 3) {
-            const bins = ['PET', 'Metal', 'Right', 'Glass'];
-            log(`⚠️ Bin full: ${bins[code]}`, 'warn');
-          }
-          if (code === 4 && state.autoCycleEnabled && !state.cycleInProgress && !state.awaitingDetection) {
-            log('👁️ Object detected', 'info');
-            state.awaitingDetection = true;
-            if (state.autoPhotoTimer) clearTimeout(state.autoPhotoTimer);
-            setTimeout(() => executeCommand('takePhoto'), 1000);
-          }
-        }
-        
-      } catch (error: any) {
-        log(`❌ WS error: ${error.message}`, 'error');
+      } catch (err: any) {
+        log(`❌ WS message error: ${err.message}`, 'error');
       }
     };
-    
+
     ws.onclose = () => {
       log('⚠️ WS closed, reconnecting...', 'warn');
       setTimeout(connectWebSocket, 5000);
     };
-    
+
     ws.onerror = () => {
       log('❌ WS connection error', 'error');
     };
-  }, [config, log, determineMaterialType, executeCommand, executeAutoCycle, executeRejectionCycle]);
+  }, [config, log, determineMaterialType, executeCommand, handleSessionTimeout]);
 
   const requestModuleId = useCallback(async () => {
     try {
@@ -1164,13 +1506,64 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(5000),
       });
       log('📟 Module ID requested', 'info');
-    } catch (error: any) {
-      log(`❌ Module ID request failed: ${error.message}`, 'error');
+    } catch (err: any) {
+      log(`❌ Module ID request failed: ${err.message}`, 'error');
     }
   }, [config, log]);
+
+  // ============================================
+  // BIN STATUS MANAGEMENT
+  // ============================================
+  const resetBinStatus = useCallback((binKey?: keyof BinStatus) => {
+    const s = stateRef.current;
+    if (binKey) {
+      s.binStatus[binKey] = false;
+    } else {
+      s.binStatus.plastic = false;
+      s.binStatus.metal = false;
+      s.binStatus.right = false;
+      s.binStatus.glass = false;
+    }
+    setBinStatus({ ...s.binStatus });
+    log(`🗑️ Bin status reset${binKey ? `: ${binKey}` : ' (all)'}`, 'success');
+  }, [log]);
+
+  // ============================================
+  // DIAGNOSTICS (from agent)
+  // ============================================
+  const runDiagnostics = useCallback(() => {
+    const s = stateRef.current;
+    const stats = s.detectionStats;
+    const total = stats.firstTimeSuccess + stats.secondTimeSuccess + stats.thirdTimeSuccess + stats.failures;
+    const firstTimeRate = total > 0 ? ((stats.firstTimeSuccess / total) * 100).toFixed(1) : '0';
+
+    console.log('\n' + '='.repeat(60));
+    console.log('🔬 SYSTEM DIAGNOSTICS');
+    console.log('='.repeat(60));
+    console.log(`  Module ID:       ${moduleIdRef.current}`);
+    console.log(`  Device ID:       ${config.device.id}`);
+    console.log(`  Auto Cycle:      ${s.autoCycleEnabled}`);
+    console.log(`  Cycle In Prog:   ${s.cycleInProgress}`);
+    console.log(`  Resetting:       ${s.resetting}`);
+    console.log(`  Compactor:       ${s.compactorRunning ? 'ON' : 'OFF'}`);
+    console.log(`  Session Code:    ${s.sessionCode || 'none'}`);
+    console.log(`  Items Processed: ${itemsProcessedRef.current}`);
+    console.log('  Bin Status:');
+    console.log(`    Plastic: ${s.binStatus.plastic ? '❌ FULL' : '✅ OK'}`);
+    console.log(`    Metal:   ${s.binStatus.metal ? '❌ FULL' : '✅ OK'}`);
+    console.log(`    Right:   ${s.binStatus.right ? '❌ FULL' : '✅ OK'}`);
+    console.log(`    Glass:   ${s.binStatus.glass ? '❌ FULL' : '✅ OK'}`);
+    console.log('  Detection Stats:');
+    console.log(`    Total: ${stats.totalAttempts} | 1st-time: ${firstTimeRate}%`);
+    console.log(`    Avg retries: ${stats.averageRetries.toFixed(2)}`);
+    if (s.averageCycleTime) {
+      console.log(`  Avg Cycle Time: ${Math.round(s.averageCycleTime)}ms`);
+    }
+    console.log('='.repeat(60) + '\n');
+  }, [config.device.id]);
 
   // ============================================
   // INITIALIZATION
@@ -1179,41 +1572,42 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     log('========================================', 'info');
     log('🚀 RVM CONTROL SYSTEM STARTING...', 'info');
     log('========================================', 'info');
-    
+
     connectWebSocket();
-    
+
     const moduleIdTimer = setTimeout(() => {
       requestModuleId();
     }, 2000);
-    
+
     return () => {
       clearTimeout(moduleIdTimer);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      if (wsRef.current) wsRef.current.close();
       clearSessionTimers();
+
+      const s = stateRef.current;
+      if (s.autoPhotoTimer) clearTimeout(s.autoPhotoTimer);
+      if (s.compactorTimer) clearTimeout(s.compactorTimer);
+      if (s.compactorIdleTimer) clearTimeout(s.compactorIdleTimer);
     };
   }, [connectWebSocket, requestModuleId, clearSessionTimers, log]);
 
-  useEffect(()=>{
-    const fetchAcceptedMaterials=async ()=>{
-      try{
-        const response=await fetch(`${keys?.base_url}api/rvm/RVM-3101/materials`);
-        const data=await response?.json();
-        const materials=data?.materials?.map((m:{id:string;materialName:string})=>(
-          {
-            materialName:m?.materialName,
-            count:0
-          }
-        ));
+  // Fetch accepted materials
+  useEffect(() => {
+    const fetchAcceptedMaterials = async () => {
+      try {
+        const response = await fetch(`${keys?.base_url}api/rvm/RVM-3101/materials`);
+        const data = await response?.json();
+        const materials = data?.materials?.map((m: { id: string; materialName: string }) => ({
+          materialName: m?.materialName,
+          count: 0,
+        }));
         setItemCounts(materials);
+      } catch (err) {
+        console.log(err);
       }
-      catch(error){
-        console.log(error);
-      }
-    }
-    fetchAcceptedMaterials()
-  },[]);
+    };
+    fetchAcceptedMaterials();
+  }, []);
 
   // ============================================
   // RETURN API
@@ -1233,11 +1627,14 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     error,
     setError,
     isProcessing,
-    
+    binStatus,
+
     // Actions
     startSession,
     startGuestSession,
     endSession,
     emergencyStop,
+    resetBinStatus,
+    runDiagnostics,
   };
 };
