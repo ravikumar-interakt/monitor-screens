@@ -2,19 +2,19 @@ import React, { useEffect, useState } from 'react';
 import Header from '../../components/layout/header';
 import Footer from '../../components/layout/footer';
 import { useNavigate } from 'react-router-dom';
-import useDeviceId from '@/hooks/useDeviceId';
+import getDeviceId from '@/hooks/getDeviceId';
 
 const ReBitCollectionScreen: React.FC = () => {
   const [petBottles,] = useState(0);
   const [aluminumCans, ] = useState(0);
   const [steelCans,] = useState(0);
   const navigate=useNavigate();
-  const deviceId=useDeviceId();
+  // const deviceId=getDeviceId();
 
   useEffect(()=>{
     const fetchAcceptedMaterials=async ()=>{
       try{
-        const response=await fetch(`/api/rvm/${deviceId}/materials`);
+        const response=await fetch(`/api/rvm/RVM-3103/materials`);
         const data=response?.json();
         console.log(data);
       }

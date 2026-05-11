@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
 import Logo from "../../../assets/mobile.png";
-import useDeviceId from "../../hooks/useDeviceId";
+import getDeviceId from "../../hooks/getDeviceId";
 
 const RegisteredUserScanningScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -13,7 +13,7 @@ const RegisteredUserScanningScreen: React.FC = () => {
   const [scanStatus, setScanStatus] = useState("...Scanning in progress...");
   const inputRef = useRef<HTMLInputElement>(null);
   const scanTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const deviceId=useDeviceId();
+  // const deviceId=getDeviceId();
 
   // Keep focus on input
   useEffect(() => {
@@ -32,7 +32,7 @@ const RegisteredUserScanningScreen: React.FC = () => {
     
     try {
       const response = await fetch(
-        `https://rebit-api.ceewen.xyz/api/rvm/${deviceId}/qr/validate`,
+        `https://rebit-api.ceewen.xyz/api/rvm/RVM-3103/qr/validate`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
