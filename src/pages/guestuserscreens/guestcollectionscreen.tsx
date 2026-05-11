@@ -3,6 +3,8 @@ import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
 import { useNavigate } from "react-router-dom";
 import { useRVMControl } from "../../hooks/useRVMControl";
+import PlasticBottle from "../../../assets/Plastic bottle.png";
+import Can from "../../../assets/Can.png";
 
 const ReBitGuestCollectionScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -22,6 +24,8 @@ const ReBitGuestCollectionScreen: React.FC = () => {
     endSession,
   } = useRVMControl();
 
+  console.log(itemCounts);
+
   // Start session when component mounts
   useEffect(() => {
     if (isReady && !sessionStarted) {
@@ -34,7 +38,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
         console.log("Component unmounting, session still active");
       }
     };
-  }, [isReady,sessionStarted]);
+  }, [isReady, sessionStarted]);
 
   const startGuestSessionFlow = async () => {
     try {
@@ -60,15 +64,15 @@ const ReBitGuestCollectionScreen: React.FC = () => {
     try {
       // End the session and get backend response with QR code
       const result = await endSession();
-      
+
       if (result.success && result.qrCode) {
         // Navigate to points screen with QR code from backend
         navigate("/guest-points-screen", {
           state: {
             sessionCode: sessionCode,
-            petBottles: itemCounts.pet,
-            aluminumCans: itemCounts.aluminum,
-            steelCans: itemCounts.steel,
+            // petBottles: itemCounts.pet,
+            // aluminumCans: itemCounts.aluminum,
+            // steelCans: itemCounts.steel,
             totalPoints: totalPoints,
             qrCode: result.qrCode, // QR code from backend
           },
@@ -108,7 +112,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
               <br />
               After placing all items, press the input complete button.
             </p>
-            
+
             {/* Status Indicator */}
             {isProcessing && (
               <div className="mt-4 flex items-center gap-2 text-[#14b8a6]">
@@ -116,7 +120,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
                 <span className="text-lg font-medium">{status}</span>
               </div>
             )}
-            
+
             {error && (
               <div className="mt-4 px-4 py-2 bg-red-100 border border-red-400 text-red-700 rounded-lg">
                 {error}
@@ -131,8 +135,7 @@ const ReBitGuestCollectionScreen: React.FC = () => {
             Collected recyclable waste
           </div>
 
-          <div className="grid grid-cols-3 gap-6 max-w-5xl">
-            {/* PET Bottles Card */}
+          {/* <div className="grid grid-cols-3 gap-6 max-w-5xl">
             <div className={`bg-white rounded-3xl shadow-lg p-8 flex flex-col items-center transition-all ${
               itemCounts.pet > 0 ? 'ring-4 ring-[#14b8a6] ring-opacity-50 scale-105' : ''
             }`}>
@@ -153,8 +156,6 @@ const ReBitGuestCollectionScreen: React.FC = () => {
                 <span className="text-2xl text-gray-600 ml-2">Piece</span>
               </div>
             </div>
-
-            {/* Aluminum Cans Card */}
             <div className={`bg-white rounded-3xl shadow-lg p-8 flex flex-col items-center transition-all ${
               itemCounts.aluminum > 0 ? 'ring-4 ring-[#14b8a6] ring-opacity-50 scale-105' : ''
             }`}>
@@ -176,7 +177,6 @@ const ReBitGuestCollectionScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Steel Cans Card */}
             <div className={`bg-white rounded-3xl shadow-lg p-8 flex flex-col items-center transition-all ${
               itemCounts.steel > 0 ? 'ring-4 ring-[#14b8a6] ring-opacity-50 scale-105' : ''
             }`}>
@@ -197,6 +197,30 @@ const ReBitGuestCollectionScreen: React.FC = () => {
                 <span className="text-2xl text-gray-600 ml-2">Piece</span>
               </div>
             </div>
+          </div> */}
+          <div className="grid grid-cols-3 gap-6 max-w-5xl">
+            {itemCounts?.map((m) => (
+              <div className="bg-white rounded-3xl shadow-lg p-8 flex flex-col items-center transition-all">
+                <div className="w-20 h-20 bg-[#14b8a6] rounded-full flex items-center justify-center mb-6">
+                  <img
+                    alt={m?.materialName}
+                    src={
+                      m?.materialName === "ペットボトル" ? PlasticBottle : Can
+                    }
+                    className="w-12 h-12"
+                  />
+                </div>
+                <h3 className="text-2xl font-bold text-[#1e3a52] mb-4">
+                  {m?.materialName}
+                </h3>
+                <div className="text-center">
+                  <span className="text-5xl font-bold text-[#1e3a52]">
+                    {m?.count}
+                  </span>
+                  <span className="text-2xl text-gray-600 ml-2">Piece</span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -223,11 +247,11 @@ const ReBitGuestCollectionScreen: React.FC = () => {
             disabled={isProcessing || !sessionActive}
             className={`px-20 py-6 rounded-full text-3xl font-semibold transition-all shadow-xl hover:shadow-2xl active:scale-95 ${
               isProcessing || !sessionActive
-                ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                : 'bg-[#14b8a6] text-white hover:bg-[#0d9488]'
+                ? "bg-gray-400 text-gray-600 cursor-not-allowed"
+                : "bg-[#14b8a6] text-white hover:bg-[#0d9488]"
             }`}
           >
-            {isProcessing ? 'Processing...' : 'Input Complete'}
+            {isProcessing ? "Processing..." : "Input Complete"}
           </button>
         </div>
       </main>

@@ -25,8 +25,6 @@ const ReBitCollectionScreen: React.FC = () => {
     fetchAcceptedMaterials()
   })
 
-  
-
   // Calculate total points (example: 1 point per item)
   const totalPoints = petBottles + aluminumCans + steelCans;
 

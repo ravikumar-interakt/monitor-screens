@@ -1,3 +1,4 @@
+import { keys } from '../config';
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 // ============================================
@@ -87,9 +88,8 @@ export interface SessionSummary {
 }
 
 export interface ItemCounts {
-  pet: number;
-  aluminum: number;
-  steel: number;
+  materialName:string;
+  count:0
 }
 
 export type RVMStatus = 'idle' | 'ready' | 'processing' | 'active' | 'rejecting' | 'error';
@@ -165,11 +165,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const [itemsProcessed, setItemsProcessed] = useState(0);
   const [totalWeight, setTotalWeight] = useState(0);
   const [totalPoints, setTotalPoints] = useState(0);
-  const [itemCounts, setItemCounts] = useState<ItemCounts>({
-    pet: 0,
-    aluminum: 0,
-    steel: 0
-  });
+  const [itemCounts, setItemCounts] = useState<ItemCounts[]>([]);
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
   const [statusMessage, setStatusMessage] = useState('Initializing...');
   const [error, setError] = useState<string | null>(null);
@@ -474,13 +470,17 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     // Update item counts based on material type
     setItemCounts(prev => {
       const newCounts = { ...prev };
-      if (itemData.material === 'PLASTIC_BOTTLE') {
-        newCounts.pet++;
-      } else if (itemData.material === 'METAL_CAN') {
-        newCounts.aluminum++;
-      } else if (itemData.material === 'GLASS') {
-        newCounts.steel++;
-      }
+      // if (itemData.material === 'PLASTIC_BOTTLE') {
+      //   newCounts.pet++;
+      // } else if (itemData.material === 'METAL_CAN') {
+      //   newCounts.aluminum++;
+      // } else if (itemData.material === 'GLASS') {
+      //   newCounts.steel++;
+      // }
+      setItemCounts(prev => ({
+        ...prev,
+        [itemData.material]: (prev[itemData?.material] || 0) + 1,
+      }));
       return newCounts;
     });
     
@@ -628,7 +628,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     setItemsProcessed(0);
     setTotalWeight(0);
     setTotalPoints(0);
-    setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
+    setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
     setStatus('active');
     setStatusMessage('Session active - Place your bottle');
     
@@ -719,7 +719,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         setItemsProcessed(0);
         setTotalWeight(0);
         setTotalPoints(0);
-        setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
+        // setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
+        setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
         
         log(`✅ Guest session created: ${data.session.sessionCode}`, 'success');
         
@@ -916,7 +917,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     setItemsProcessed(0);
     setTotalWeight(0);
     setTotalPoints(0);
-    setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
+    // setItemCounts({ pet: 0, aluminum: 0, steel: 0 });
+    setItemCounts((prev)=>prev?.map((m)=>({materialName:m?.materialName,count:0})));
     setStatus('ready');
     setStatusMessage('System ready');
     
@@ -1192,6 +1194,26 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       clearSessionTimers();
     };
   }, [connectWebSocket, requestModuleId, clearSessionTimers, log]);
+
+  useEffect(()=>{
+    const fetchAcceptedMaterials=async ()=>{
+      try{
+        const response=await fetch(`${keys?.base_url}api/rvm/RVM-3101/materials`);
+        const data=await response?.json();
+        const materials=data?.materials?.map((m:{id:string;materialName:string})=>(
+          {
+            materialName:m?.materialName,
+            count:0
+          }
+        ));
+        setItemCounts(materials);
+      }
+      catch(error){
+        console.log(error);
+      }
+    }
+    fetchAcceptedMaterials()
+  },[]);
 
   // ============================================
   // RETURN API
