@@ -102,7 +102,7 @@ const DEFAULT_CONFIG: RVMConfig = {
     id: 'RVM-3101'
   },
   backend: {
-    url: 'https://rebit-api.ceewen.xyz',
+    url: 'https://app.rebit-japan.com',
     validateEndpoint: '/api/rvm/RVM-3101/qr/validate',
     timeout: 10000
   },
