@@ -1353,6 +1353,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     ws.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data as string);
+        console.log(message,'message')
         const s = stateRef.current;
 
         // ── Module ID ──

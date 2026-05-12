@@ -6,11 +6,13 @@ import UserLogo from "../../assets/Illust.png";
 import { useRVMVideos } from "../context/rvmvideoscontext";
 import { keys } from "../config";
 import getDeviceId from "../hooks/getDeviceId";
+import { useRVMControl } from "../hooks/useRVMControl";
 
 const HomeScreen: React.FC = () => {
   const navigate = useNavigate();
   const [waitingScreenVideo, setWaitingScreenVideo] = useState("");
   const [showScreen, setShowScreen] = useState(false);
+  const {itemCounts}=useRVMControl();
 
   const handleYes = () => {
     navigate("/registreduser");
