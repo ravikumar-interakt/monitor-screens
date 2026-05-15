@@ -422,6 +422,21 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config.detection, log]);
 
   // ============================================
+  // MATERIAL NAME MAPPING
+  // AI detection returns English (PLASTIC_BOTTLE, METAL_CAN, GLASS)
+  // DB/backend stores Japanese (ペットボトル, ステール缶, etc.)
+  // ============================================
+  const MATERIAL_NAME_MAP: Record<string, string> = {
+    'PLASTIC_BOTTLE': 'ペットボトル',
+    'METAL_CAN': 'ステール缶',
+    'GLASS': 'ガラス',
+  };
+
+  const getJapaneseMaterialName = useCallback((englishType: string): string => {
+    return MATERIAL_NAME_MAP[englishType] || englishType;
+  }, []);
+
+  // ============================================
   // BACKEND API CALLS
   // ============================================
   const recordItemToBackend = useCallback(async (itemData: ItemData) => {
@@ -440,7 +455,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            material: itemData.material,
+            material: getJapaneseMaterialName(itemData.material),
             weight: itemData.weight,
             confidence: itemData.confidence / 100,
           }),
@@ -760,9 +775,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       timestamp: new Date().toISOString(),
     };
 
-    // Update item counts
+    // Update item counts (match by Japanese name since itemCounts uses Japanese)
+    const japaneseName = getJapaneseMaterialName(itemData.material);
     setItemCounts(prev => {
-      const idx = prev.findIndex(m => m.materialName === itemData.material);
+      const idx = prev.findIndex(m => m.materialName === japaneseName);
       if (idx !== -1) {
         const updated = [...prev];
         updated[idx] = { ...updated[idx], count: updated[idx].count + 1 };
