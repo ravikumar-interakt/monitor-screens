@@ -197,8 +197,8 @@ const DEFAULT_CONFIG: RVMConfig = {
 export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ── Exposed state ──
   const [status, setStatus] = useState<RVMStatus>('idle');
-  const [isReady, setIsReady] = useState(false);
-  const [moduleId, setModuleId] = useState<string | null>(null);
+  const [isReady, setIsReady] = useState(true);
+  const [moduleId, setModuleId] = useState<string | null>('9');
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
   const [itemsProcessed, setItemsProcessed] = useState(0);
@@ -218,7 +218,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ── Internal refs (no re-renders) ──
   const wsRef = useRef<WebSocket | null>(null);
-  const moduleIdRef = useRef<string | null>(null);
+  const moduleIdRef = useRef<string | null>('9');
   const itemsProcessedRef = useRef(0);
   const totalWeightRef = useRef(0);
 
