@@ -1340,7 +1340,19 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // WEBSOCKET
   // (Updated to match agent's WS handler flow)
   // ============================================
+  const moduleIdRetryRef = useRef(0);
+  const MAX_MODULE_ID_RETRIES = 10;
+
   const connectWebSocket = useCallback(() => {
+    // Close any existing connection first (prevents StrictMode double-mount issues)
+    if (wsRef.current) {
+      try {
+        wsRef.current.onclose = null; // prevent reconnect trigger
+        wsRef.current.close();
+      } catch (_) { /* ignore */ }
+      wsRef.current = null;
+    }
+
     log('🔌 Connecting WebSocket...', 'info');
 
     const ws = new WebSocket(config.local.wsUrl);
@@ -1348,22 +1360,30 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     ws.onopen = () => {
       log('✅ WebSocket connected', 'success');
+
+      // Request moduleId AFTER WS is connected so the response can arrive on this socket
+      if (!moduleIdRef.current) {
+        setTimeout(() => {
+          log('📟 Requesting Module ID (after WS connect)...', 'info');
+          requestModuleId();
+        }, 1000);
+      }
     };
 
     ws.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data as string);
-        console.log(message,'message')
         const s = stateRef.current;
 
         // ── Module ID ──
         if (message.function === '01') {
           setModuleId(message.moduleId);
           moduleIdRef.current = message.moduleId;
+          moduleIdRetryRef.current = 0;
           setIsReady(true);
           setStatus('ready');
           setStatusMessage('System ready');
-          log(`📟 Module ID: ${message.moduleId}`, 'info');
+          log(`📟 Module ID received: ${message.moduleId}`, 'success');
           return;
         }
 
@@ -1576,13 +1596,24 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     connectWebSocket();
 
-    const moduleIdTimer = setTimeout(() => {
-      requestModuleId();
-    }, 2000);
+    // Retry moduleId every 5s if not received (matches agent heartbeat pattern)
+    const moduleIdRetryInterval = setInterval(() => {
+      if (!moduleIdRef.current && moduleIdRetryRef.current < MAX_MODULE_ID_RETRIES) {
+        moduleIdRetryRef.current++;
+        log(`📟 Module ID retry #${moduleIdRetryRef.current}...`, 'info');
+        requestModuleId();
+      } else if (moduleIdRef.current) {
+        clearInterval(moduleIdRetryInterval);
+      }
+    }, 5000);
 
     return () => {
-      clearTimeout(moduleIdTimer);
-      if (wsRef.current) wsRef.current.close();
+      clearInterval(moduleIdRetryInterval);
+      if (wsRef.current) {
+        wsRef.current.onclose = null; // prevent reconnect on unmount
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       clearSessionTimers();
 
       const s = stateRef.current;
