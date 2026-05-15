@@ -1353,189 +1353,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config, executeCommand, stopCompactor, log]);
 
   // ============================================
-  // WEBSOCKET
-  // (Updated to match agent's WS handler flow)
+  // WEBSOCKET & MODULE ID
+  // (Defined as stable refs — actual WS logic
+  //  lives in the init useEffect below)
   // ============================================
-  const moduleIdRetryRef = useRef(0);
-  const MAX_MODULE_ID_RETRIES = 10;
-
-  const connectWebSocket = useCallback(() => {
-    // Close any existing connection first (prevents StrictMode double-mount issues)
-    if (wsRef.current) {
-      try {
-        wsRef.current.onclose = null; // prevent reconnect trigger
-        wsRef.current.close();
-      } catch (_) { /* ignore */ }
-      wsRef.current = null;
-    }
-
-    log('🔌 Connecting WebSocket...', 'info');
-
-    const ws = new WebSocket(config.local.wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      log('✅ WebSocket connected', 'success');
-
-      // Request moduleId AFTER WS is connected so the response can arrive on this socket
-      if (!moduleIdRef.current) {
-        setTimeout(() => {
-          log('📟 Requesting Module ID (after WS connect)...', 'info');
-          requestModuleId();
-        }, 1000);
-      }
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const message = JSON.parse(event.data as string);
-        const s = stateRef.current;
-
-        // ── Module ID ──
-        if (message.function === '01') {
-          setModuleId(message.moduleId);
-          moduleIdRef.current = message.moduleId;
-          moduleIdRetryRef.current = 0;
-          setIsReady(true);
-          setStatus('ready');
-          setStatusMessage('System ready');
-          log(`📟 Module ID received: ${message.moduleId}`, 'success');
-          return;
-        }
-
-        // ── AI Photo Result ──
-        if (message.function === 'aiPhoto') {
-          const aiData = JSON.parse(message.data);
-          const materialType = determineMaterialType(aiData);
-
-          s.aiResult = {
-            matchRate: Math.round((aiData.probability || 0) * 100),
-            materialType,
-            className: aiData.className,
-            taskId: aiData.taskId,
-            timestamp: new Date().toISOString(),
-          };
-
-          log(`🤖 AI: ${materialType} (${s.aiResult.matchRate}%)`, 'info');
-
-          // Agent flow: after AI result, always go to weight measurement
-          // (UNKNOWN detection + rejection happens after weight is received)
-          if (s.autoCycleEnabled && s.awaitingDetection) {
-            s.awaitingDetection = false;
-            log('🔍 AI detection complete - measuring weight...', 'detection');
-            setTimeout(() => executeCommand('getWeight'), 300);
-          }
-          return;
-        }
-
-        // ── Weight Result ──
-        if (message.function === '06') {
-          const weightValue = parseFloat(message.data) || 0;
-          const coefficient = config.weight.coefficients[1];
-          const calibratedWeight = weightValue * (coefficient / 1000);
-
-          s.weight = {
-            weight: Math.round(calibratedWeight * 10) / 10,
-            rawWeight: weightValue,
-            coefficient,
-            timestamp: new Date().toISOString(),
-          };
-
-          log(`⚖️ Weight: ${s.weight.weight}g`, 'info');
-
-          // Calibration retry for zero weight
-          if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
-            s.calibrationAttempts++;
-            setTimeout(async () => {
-              await executeCommand('calibrateWeight');
-              setTimeout(() => executeCommand('getWeight'), config.timing.calibrationDelay);
-            }, 500);
-            return;
-          }
-          if (s.weight.weight > 0) s.calibrationAttempts = 0;
-
-          // Agent flow: handle detection result + weight together
-          if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
-            log(`⚖️ Final weight: ${s.weight.weight}g`, 'info');
-
-            // Too light — no real item
-            if (s.weight.weight < config.detection.minValidWeight) {
-              log('⚠️ Weight too low after photo - skipping', 'warn');
-              s.aiResult = null;
-              s.weight = null;
-              s.itemAlreadyPositioned = false;
-              await scheduleNextPhotoRef.current?.();
-              return;
-            }
-
-            // Unknown material — reject
-            if (s.aiResult.materialType === 'UNKNOWN') {
-              log('❌ Unknown material - rejecting', 'warn');
-              s.cycleInProgress = true;
-              setTimeout(() => executeRejectionCycleRef.current?.(), 500);
-              return;
-            }
-
-            // Valid detection + valid weight — start cycle
-            log('✅ Starting auto cycle...', 'success');
-            s.cycleInProgress = true;
-            setTimeout(() => executeAutoCycleRef.current?.(), 500);
-          }
-          return;
-        }
-
-        // ── Device Status / Bin Status ──
-        if (message.function === 'deviceStatus') {
-          const binCode = parseInt(message.data);
-
-          const binStatusMap: Record<number, { name: string; key: keyof BinStatus | null; critical: boolean; isObjectSensor?: boolean }> = {
-            0: { name: 'Plastic (PET)', key: 'plastic', critical: true },
-            1: { name: 'Metal Can', key: 'metal', critical: true },
-            2: { name: 'Right Bin', key: 'right', critical: false },
-            3: { name: 'Glass', key: 'glass', critical: false },
-            4: { name: 'Infrared Sensor', key: null, critical: false, isObjectSensor: true },
-          };
-
-          const binInfo = binStatusMap[binCode];
-
-          if (binInfo) {
-            if (binInfo.isObjectSensor) return; // Sensor disabled
-
-            log(`⚠️ ${binInfo.name} bin full`, 'warn');
-
-            if (binInfo.key) {
-              s.binStatus[binInfo.key] = true;
-              setBinStatus({ ...s.binStatus });
-
-              // If the full bin matches the current item's target, end session
-              if (binInfo.critical && s.autoCycleEnabled) {
-                const currentMaterialBin: keyof BinStatus | null =
-                  s.aiResult?.materialType === 'METAL_CAN' ? 'metal' : 'plastic';
-
-                if (binInfo.key === currentMaterialBin) {
-                  setTimeout(async () => {
-                    await handleSessionTimeout('bin_full');
-                  }, 2000);
-                }
-              }
-            }
-          }
-          return;
-        }
-      } catch (err: any) {
-        log(`❌ WS message error: ${err.message}`, 'error');
-      }
-    };
-
-    ws.onclose = () => {
-      log('⚠️ WS closed, reconnecting...', 'warn');
-      setTimeout(connectWebSocket, 5000);
-    };
-
-    ws.onerror = () => {
-      log('❌ WS connection error', 'error');
-    };
-  }, [config, log, determineMaterialType, executeCommand, handleSessionTimeout]);
 
   const requestModuleId = useCallback(async () => {
     try {
@@ -1605,39 +1426,239 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ============================================
   // INITIALIZATION
   // ============================================
+
+  // Store latest callbacks in refs so the WS handler always calls the current version
+  const determineMaterialTypeRef = useRef(determineMaterialType);
+  const executeCommandRef = useRef(executeCommand);
+  const handleSessionTimeoutRef = useRef(handleSessionTimeout);
+  const requestModuleIdRef = useRef(requestModuleId);
+
+  useEffect(() => { determineMaterialTypeRef.current = determineMaterialType; }, [determineMaterialType]);
+  useEffect(() => { executeCommandRef.current = executeCommand; }, [executeCommand]);
+  useEffect(() => { handleSessionTimeoutRef.current = handleSessionTimeout; }, [handleSessionTimeout]);
+  useEffect(() => { requestModuleIdRef.current = requestModuleId; }, [requestModuleId]);
+
+  // Single stable init — runs ONCE, never re-creates WebSocket on re-renders
   useEffect(() => {
     log('========================================', 'info');
     log('🚀 RVM CONTROL SYSTEM STARTING...', 'info');
     log('========================================', 'info');
 
-    connectWebSocket();
+    let destroyed = false; // cleanup flag to prevent actions after unmount
 
-    // Retry moduleId every 5s if not received (matches agent heartbeat pattern)
+    function connectWS() {
+      if (destroyed) return;
+
+      // Close any existing connection
+      if (wsRef.current) {
+        try {
+          wsRef.current.onclose = null;
+          wsRef.current.close();
+        } catch (_) { /* ignore */ }
+        wsRef.current = null;
+      }
+
+      console.log('[WS] Connecting WebSocket...');
+
+      const ws = new WebSocket(config.local.wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (destroyed) return;
+        console.log('[WS] ✅ WebSocket connected');
+
+        // Request moduleId now that WS is ready to receive the response
+        if (!moduleIdRef.current) {
+          setTimeout(() => {
+            if (!destroyed && !moduleIdRef.current) {
+              console.log('[WS] 📟 Requesting Module ID...');
+              requestModuleIdRef.current();
+            }
+          }, 1000);
+        }
+      };
+
+      ws.onmessage = async (event) => {
+        if (destroyed) return;
+        try {
+          const message = JSON.parse(event.data as string);
+          const s = stateRef.current;
+
+          // ── Module ID ──
+          if (message.function === '01') {
+            setModuleId(message.moduleId);
+            moduleIdRef.current = message.moduleId;
+            moduleIdRetryRef.current = 0;
+            setIsReady(true);
+            setStatus('ready');
+            setStatusMessage('System ready');
+            console.log(`[WS] ✅ Module ID received: ${message.moduleId}`);
+            return;
+          }
+
+          // ── AI Photo Result ──
+          if (message.function === 'aiPhoto') {
+            const aiData = JSON.parse(message.data);
+            const materialType = determineMaterialTypeRef.current(aiData);
+
+            s.aiResult = {
+              matchRate: Math.round((aiData.probability || 0) * 100),
+              materialType,
+              className: aiData.className,
+              taskId: aiData.taskId,
+              timestamp: new Date().toISOString(),
+            };
+
+            console.log(`[WS] 🤖 AI: ${materialType} (${s.aiResult.matchRate}%)`);
+
+            if (s.autoCycleEnabled && s.awaitingDetection) {
+              s.awaitingDetection = false;
+              console.log('[WS] 🔍 AI detection complete - measuring weight...');
+              setTimeout(() => executeCommandRef.current('getWeight'), 300);
+            }
+            return;
+          }
+
+          // ── Weight Result ──
+          if (message.function === '06') {
+            const weightValue = parseFloat(message.data) || 0;
+            const coefficient = config.weight.coefficients[1];
+            const calibratedWeight = weightValue * (coefficient / 1000);
+
+            s.weight = {
+              weight: Math.round(calibratedWeight * 10) / 10,
+              rawWeight: weightValue,
+              coefficient,
+              timestamp: new Date().toISOString(),
+            };
+
+            console.log(`[WS] ⚖️ Weight: ${s.weight.weight}g`);
+
+            // Calibration retry for zero weight
+            if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
+              s.calibrationAttempts++;
+              setTimeout(async () => {
+                await executeCommandRef.current('calibrateWeight');
+                setTimeout(() => executeCommandRef.current('getWeight'), config.timing.calibrationDelay);
+              }, 500);
+              return;
+            }
+            if (s.weight.weight > 0) s.calibrationAttempts = 0;
+
+            // Handle detection result + weight together
+            if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
+              console.log(`[WS] ⚖️ Final weight: ${s.weight.weight}g`);
+
+              if (s.weight.weight < config.detection.minValidWeight) {
+                console.log('[WS] ⚠️ Weight too low - skipping');
+                s.aiResult = null;
+                s.weight = null;
+                s.itemAlreadyPositioned = false;
+                await scheduleNextPhotoRef.current?.();
+                return;
+              }
+
+              if (s.aiResult.materialType === 'UNKNOWN') {
+                console.log('[WS] ❌ Unknown material - rejecting');
+                s.cycleInProgress = true;
+                setTimeout(() => executeRejectionCycleRef.current?.(), 500);
+                return;
+              }
+
+              console.log('[WS] ✅ Starting auto cycle...');
+              s.cycleInProgress = true;
+              setTimeout(() => executeAutoCycleRef.current?.(), 500);
+            }
+            return;
+          }
+
+          // ── Device Status / Bin Status ──
+          if (message.function === 'deviceStatus') {
+            const binCode = parseInt(message.data);
+
+            const binStatusMap: Record<number, { name: string; key: keyof BinStatus | null; critical: boolean; isObjectSensor?: boolean }> = {
+              0: { name: 'Plastic (PET)', key: 'plastic', critical: true },
+              1: { name: 'Metal Can', key: 'metal', critical: true },
+              2: { name: 'Right Bin', key: 'right', critical: false },
+              3: { name: 'Glass', key: 'glass', critical: false },
+              4: { name: 'Infrared Sensor', key: null, critical: false, isObjectSensor: true },
+            };
+
+            const binInfo = binStatusMap[binCode];
+
+            if (binInfo) {
+              if (binInfo.isObjectSensor) return;
+
+              console.log(`[WS] ⚠️ ${binInfo.name} bin full`);
+
+              if (binInfo.key) {
+                s.binStatus[binInfo.key] = true;
+                setBinStatus({ ...s.binStatus });
+
+                if (binInfo.critical && s.autoCycleEnabled) {
+                  const currentMaterialBin: keyof BinStatus | null =
+                    s.aiResult?.materialType === 'METAL_CAN' ? 'metal' : 'plastic';
+
+                  if (binInfo.key === currentMaterialBin) {
+                    setTimeout(async () => {
+                      await handleSessionTimeoutRef.current('bin_full');
+                    }, 2000);
+                  }
+                }
+              }
+            }
+            return;
+          }
+        } catch (err: any) {
+          console.error(`[WS] ❌ Message error: ${err.message}`);
+        }
+      };
+
+      ws.onclose = () => {
+        if (destroyed) return;
+        console.log('[WS] ⚠️ Closed, reconnecting in 5s...');
+        setTimeout(connectWS, 5000);
+      };
+
+      ws.onerror = () => {
+        if (destroyed) return;
+        console.error('[WS] ❌ Connection error');
+      };
+    }
+
+    // Connect WebSocket
+    connectWS();
+
+    // Retry moduleId every 5s if not received
     const moduleIdRetryInterval = setInterval(() => {
+      if (destroyed) return;
       if (!moduleIdRef.current && moduleIdRetryRef.current < MAX_MODULE_ID_RETRIES) {
         moduleIdRetryRef.current++;
-        log(`📟 Module ID retry #${moduleIdRetryRef.current}...`, 'info');
-        requestModuleId();
+        console.log(`[WS] 📟 Module ID retry #${moduleIdRetryRef.current}...`);
+        requestModuleIdRef.current();
       } else if (moduleIdRef.current) {
         clearInterval(moduleIdRetryInterval);
       }
     }, 5000);
 
     return () => {
+      destroyed = true;
       clearInterval(moduleIdRetryInterval);
       if (wsRef.current) {
-        wsRef.current.onclose = null; // prevent reconnect on unmount
+        wsRef.current.onclose = null;
         wsRef.current.close();
         wsRef.current = null;
       }
-      clearSessionTimers();
 
       const s = stateRef.current;
+      if (s.sessionTimeoutTimer) clearTimeout(s.sessionTimeoutTimer);
+      if (s.maxDurationTimer) clearTimeout(s.maxDurationTimer);
       if (s.autoPhotoTimer) clearTimeout(s.autoPhotoTimer);
       if (s.compactorTimer) clearTimeout(s.compactorTimer);
       if (s.compactorIdleTimer) clearTimeout(s.compactorIdleTimer);
     };
-  }, [connectWebSocket, requestModuleId, clearSessionTimers, log]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // EMPTY DEPS — runs once, never re-creates WebSocket
 
   // Fetch accepted materials
   useEffect(() => {
