@@ -14,7 +14,7 @@ const Footer = () => {
               <span>ReBit</span>
               <div className="flex items-center gap-1">
                 <span>b</span>
-                <div className="w-9 h-9 bg-gradient-to-br from-[#fbbf24] to-[#f59e0b] rounded-sm"></div>
+                <div className="w-9 h-9 bg-linear-to-br from-[#fbbf24] to-[#f59e0b] rounded-sm"></div>
                 <span>x</span>
               </div>
             </div>

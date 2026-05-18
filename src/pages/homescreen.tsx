@@ -61,21 +61,18 @@ const HomeScreen: React.FC = () => {
             <div className="flex-1 flex flex-col items-center justify-center w-full max-w-4xl">
               {/* Image Container - Replace with actual image */}
               <div className="p-20 mb-12 w-full relative">
-                <div className="flex justify-center items-center h-64">
+                <div className="flex justify-center items-center">
                   {/* Placeholder for person with phone image */}
-                  <img src={UserLogo} />
+                  <img src={UserLogo} className="h-full w-full"/>
                 </div>
               </div>
 
               {/* Text Content */}
               <h1 className="text-5xl font-bold text-[#1e3a52] text-center mb-6">
-                Are you a ReBit app member?
+              ReBitアプリの会員ですか？
               </h1>
               <p className="text-2xl text-gray-600 text-center mb-16 leading-relaxed">
-                The operation method differs depending on whether
-                <br />
-                you <span className="inline-block">are a member</span> or
-                non-member.
+              員／非会員で操作方法が異なります
               </p>
 
               {/* Buttons */}
@@ -84,13 +81,13 @@ const HomeScreen: React.FC = () => {
                   onClick={handleYes}
                   className="px-24 py-6 rounded-full bg-[#14b8a6] text-white text-3xl font-semibold hover:bg-[#0d9488] transition-all shadow-xl hover:shadow-2xl active:scale-95"
                 >
-                  Yes
+                  はい
                 </button>
                 <button
                   onClick={handleNo}
                   className="px-24 py-6 rounded-full bg-[#14b8a6] text-white text-3xl font-semibold hover:bg-[#0d9488] transition-all shadow-xl hover:shadow-2xl active:scale-95"
                 >
-                  No
+                  いいえ
                 </button>
               </div>
             </div>
