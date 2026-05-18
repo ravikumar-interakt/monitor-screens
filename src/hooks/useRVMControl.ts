@@ -859,8 +859,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log('🔍 Checking weight for item presence...', 'info');
 
       try {
-        // ⚡ getWeight already includes weightDelay internally
+        // getWeight HTTP call triggers the measurement (includes internal 600ms delay)
+        // But the actual weight VALUE arrives via WebSocket (function '06')
+        // We need an EXTRA delay to let the WS response arrive and populate s.weight
         await executeCommand('getWeight');
+        await delay(config.timing.weightDelay);  // ✅ Wait for WS response
 
         if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
           log(`⚖️ No item detected (weight: ${s.weight ? s.weight.weight + 'g' : 'null'}) - waiting...`, 'debug');
@@ -918,7 +921,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           await scheduleNextPhotoRef.current?.();
         }
       }
-    }, 100);  // ⚡ was 500ms
+    }, 500);  // ✅ Restored - 100ms was too aggressive for serial polling
   }, [config, executeCommand, log]);
 
   // Keep refs updated for mutual recursion
