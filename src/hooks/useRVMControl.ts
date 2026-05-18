@@ -128,11 +128,11 @@ export type RVMStatus = 'idle' | 'ready' | 'processing' | 'active' | 'rejecting'
 // ============================================
 const DEFAULT_CONFIG: RVMConfig = {
   device: {
-    id: 'RVM-3101',
+    id: 'RVM-3102',
   },
   backend: {
     url: 'https://app.rebit-japan.com',
-    validateEndpoint: '/api/rvm/RVM-3101/qr/validate',
+    validateEndpoint: '/api/rvm/RVM-3102/qr/validate',
     timeout: 8000,
   },
   local: {
@@ -1432,6 +1432,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const executeCommandRef = useRef(executeCommand);
   const handleSessionTimeoutRef = useRef(handleSessionTimeout);
   const requestModuleIdRef = useRef(requestModuleId);
+  const moduleIdRetryRef = useRef(0);
+  const MAX_MODULE_ID_RETRIES = 10;
 
   useEffect(() => { determineMaterialTypeRef.current = determineMaterialType; }, [determineMaterialType]);
   useEffect(() => { executeCommandRef.current = executeCommand; }, [executeCommand]);
@@ -1664,7 +1666,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   useEffect(() => {
     const fetchAcceptedMaterials = async () => {
       try {
-        const response = await fetch(`${keys?.base_url}api/rvm/RVM-3101/materials`);
+        const response = await fetch(`${keys?.base_url}api/rvm/RVM-3102/materials`);
         const data = await response?.json();
         const materials = data?.materials?.map((m: { id: string; materialName: string }) => ({
           materialName: m?.materialName,
