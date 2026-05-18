@@ -218,7 +218,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ── Internal refs (no re-renders) ──
   const wsRef = useRef<WebSocket | null>(null);
-  const moduleIdRef = useRef<string | null>('9');
+  const moduleIdRef = useRef<string | null>('09');
   const itemsProcessedRef = useRef(0);
   const totalWeightRef = useRef(0);
 
