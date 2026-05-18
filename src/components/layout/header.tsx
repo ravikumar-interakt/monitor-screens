@@ -82,30 +82,33 @@ const Header = () => {
 
   return (
     <>
-      <header className="bg-[#1e3a52] py-6 px-12 flex items-center justify-between">
-        <img src={Logo} className="h-32 w-56" />
+      <header className="bg-[#162a39] py-6 px-12 flex items-center justify-end">
+        <div className="w-1/2 flex items-center justify-between">
+          <img
+            src="https://2374de0cfadcd9e0873215900598bd47.cdn.bubble.io/cdn-cgi/image/w=192,h=107,f=auto,dpr=2,fit=contain/f1760490037698x830374727604809700/box_%E9%80%8F%E9%81%8E.png"
+            className="h-full w-36"
+          />
 
-        <button
-          className="bg-[#14b8a6] px-4 py-2 rounded-full text-white"
-          onClick={() => {
-            setIsOpen(true);
-            setSelectedIssue(null);
-          }}
-        >
-          Report a problem
-        </button>
+          <button
+            className="bg-[#14b8a6] px-4 py-2 rounded-full text-white"
+            onClick={() => {
+              setIsOpen(true);
+              setSelectedIssue(null);
+            }}
+          >
+            不具合通報
+          </button>
+        </div>
       </header>
 
       {/* Modal */}
       {isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          
           {/* Background */}
           <div className="absolute inset-0 backdrop-blur-md" />
 
           {/* Content */}
           <div className="relative w-full max-w-md px-5 bg-transparent py-6 z-50 flex flex-col text-[#14b8a6]">
-            
             {/* Issues */}
             <div className="flex-1 overflow-y-auto space-y-3">
               {loading ? (
@@ -113,7 +116,7 @@ const Header = () => {
               ) : issuesList.length === 0 ? (
                 <p className="text-white/80">No issues found</p>
               ) : (
-                issuesList.map((issue) => {
+                issuesList?.map((issue) => {
                   const isSelected = selectedIssue === issue.id;
                   const isSubmitting = submittingId === issue.id;
 
@@ -128,16 +131,10 @@ const Header = () => {
                             ? "bg-[#14b8a6] text-white shadow-lg"
                             : "bg-[#14b8a6] text-white"
                         }
-                        ${
-                          submittingId
-                            ? "opacity-70 cursor-not-allowed"
-                            : ""
-                        }
+                        ${submittingId ? "opacity-70 cursor-not-allowed" : ""}
                       `}
                     >
-                      <span className="font-medium">
-                        {issue.title}
-                      </span>
+                      <span className="font-medium">{issue.title}</span>
 
                       {isSubmitting ? (
                         <span>...</span>

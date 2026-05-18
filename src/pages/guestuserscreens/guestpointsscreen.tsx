@@ -26,25 +26,26 @@ const GuestPointsScreen = () => {
   const state = location.state as LocationState;
 
   // Redirect if no session data
-  if (!state || !state.qrCode) {
-    console.error("No session data or QR code available");
-    setTimeout(() => navigate("/"), 100);
-    return null;
-  }
+  // if (!state || !state.qrCode) {
+  //   console.error("No session data or QR code available");
+  //   setTimeout(() => navigate("/"), 100);
+  //   return null;
+  // }
 
   const { qrCode, petBottles, aluminumCans, steelCans, totalPoints } = state;
 
   const handleDone = () => {
-    navigate("/success-screen", {
-      state: {
-        totalPoints: totalPoints,
-        itemCounts: {
-          pet: petBottles,
-          aluminum: aluminumCans,
-          steel: steelCans,
-        },
-      },
-    });
+    // navigate("/success-screen", {
+    //   state: {
+    //     totalPoints: totalPoints,
+    //     itemCounts: {
+    //       pet: petBottles,
+    //       aluminum: aluminumCans,
+    //       steel: steelCans,
+    //     },
+    //   },
+    // });
+    navigate("/")
   };
 
   return (
@@ -70,10 +71,10 @@ const GuestPointsScreen = () => {
 
           <div className="flex-1 pt-2">
             <p className="text-xl text-[#1e3a52] font-semibold leading-relaxed">
-              {qrCode.message}
+              {qrCode?.message}
             </p>
             <p className="text-lg text-gray-600 mt-2">
-              This code expires in {qrCode.expiresIn}
+              This code expires in {qrCode?.expiresIn}
             </p>
           </div>
         </div>
@@ -87,7 +88,7 @@ const GuestPointsScreen = () => {
           <div className="bg-white rounded-3xl shadow-lg p-12 max-w-5xl flex flex-col items-center">
             {/* QR Code Image from Backend */}
             <img
-              src={qrCode.qrCodeUrl}
+              src={qrCode?.qrCodeUrl}
               alt="QR Code for claiming points"
               className="w-96 h-96 mb-6"
             />
@@ -96,7 +97,7 @@ const GuestPointsScreen = () => {
             <div className="text-center">
               <p className="text-sm text-gray-500 mb-1">Claim Code</p>
               <p className="text-xl font-mono font-bold text-[#1e3a52] bg-gray-100 px-6 py-3 rounded-lg">
-                {qrCode.claimCode}
+                {qrCode?.claimCode}
               </p>
             </div>
           </div>
