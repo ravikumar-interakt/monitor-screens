@@ -123,16 +123,25 @@ export interface DetectionStats {
 export type RVMStatus = 'idle' | 'ready' | 'processing' | 'active' | 'rejecting' | 'error';
 
 // ============================================
+// DYNAMIC DEVICE ID
+// ============================================
+// Priority: 1) env var  2) keys config  3) fallback
+const DEVICE_ID: string =
+  (typeof process !== 'undefined' && process.env?.REACT_APP_DEVICE_ID) ||
+  (keys as any)?.device_id ||
+  'RVM-3102';
+
+// ============================================
 // DEFAULT CONFIGURATION
-// (Matches agent config — timings, thresholds, etc.)
+// ⚡ Timings match speed-optimized agent
 // ============================================
 const DEFAULT_CONFIG: RVMConfig = {
   device: {
-    id: 'RVM-3102',
+    id: DEVICE_ID,
   },
   backend: {
     url: 'https://app.rebit-japan.com',
-    validateEndpoint: '/api/rvm/RVM-3102/qr/validate',
+    validateEndpoint: `/api/rvm/${DEVICE_ID}/qr/validate`,
     timeout: 8000,
   },
   local: {
@@ -168,18 +177,18 @@ const DEFAULT_CONFIG: RVMConfig = {
   },
   timing: {
     beltToWeight: 1800,
-    beltToStepper: 2200,
+    beltToStepper: 1800,       // ⚡ was 2200
     beltReverse: 3500,
     stepperRotate: 2200,
-    stepperReset: 3000,
+    stepperReset: 2200,        // ⚡ was 3000
     compactorIdleStop: 20000,
-    positionSettle: 200,
+    positionSettle: 100,       // ⚡ was 200
     gateOperation: 600,
     autoPhotoDelay: 2500,
     sessionTimeout: 300000,
     sessionMaxDuration: 600000,
     weightDelay: 600,
-    photoDelay: 600,
+    photoDelay: 300,           // ⚡ was 600
     calibrationDelay: 800,
     commandDelay: 100,
     resetHomeDelay: 1000,
@@ -198,7 +207,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ── Exposed state ──
   const [status, setStatus] = useState<RVMStatus>('idle');
   const [isReady, setIsReady] = useState(true);
-  const [moduleId, setModuleId] = useState<string | null>('9');
+  const [moduleId, setModuleId] = useState<string | null>('09');
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
   const [itemsProcessed, setItemsProcessed] = useState(0);
@@ -240,13 +249,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     resetting: false,
     itemAlreadyPositioned: false,
 
-    // Continuous compactor (matches agent)
     compactorRunning: false,
     compactorTimer: null as ReturnType<typeof setTimeout> | null,
     compactorIdleTimer: null as ReturnType<typeof setTimeout> | null,
     lastItemTime: null as number | null,
 
-    // Bin status (matches agent)
     binStatus: {
       plastic: false,
       metal: false,
@@ -254,7 +261,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       glass: false,
     } as BinStatus,
 
-    // Cycle timing & detection stats (matches agent)
     lastCycleTime: null as number | null,
     averageCycleTime: null as number | null,
     cycleCount: 0,
@@ -271,7 +277,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     } as DetectionStats,
   });
 
-  // Keep refs in sync with state
   useEffect(() => { moduleIdRef.current = moduleId; }, [moduleId]);
 
   // ============================================
@@ -285,7 +290,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, []);
 
   // ============================================
-  // CYCLE TIMING & DETECTION STATS (from agent)
+  // CYCLE TIMING & DETECTION STATS
   // ============================================
   const trackCycleTime = useCallback((startTime: number) => {
     const s = stateRef.current;
@@ -328,7 +333,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ============================================
   // MATERIAL TYPE DETECTION
-  // (Updated to match agent — new 0-pet / 1-can format)
   // ============================================
   const determineMaterialType = useCallback((aiData: any): string => {
     const className = (aiData.className || '').toLowerCase().trim();
@@ -339,7 +343,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     let hasStrongKeyword = false;
     let detectionFormat = 'unknown';
 
-    // ── New standard format (0-pet, 1-can) ──
     if (className === '0-pet' || className.startsWith('0-pet')) {
       materialType = 'PLASTIC_BOTTLE';
       threshold = config.detection.PLASTIC_BOTTLE;
@@ -351,7 +354,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       hasStrongKeyword = true;
       detectionFormat = 'new_standard';
     }
-    // ── Variant formats ──
     else if (/^0[-_\s]*(pet|plastic|bottle)/i.test(className)) {
       materialType = 'PLASTIC_BOTTLE';
       threshold = config.detection.PLASTIC_BOTTLE;
@@ -363,7 +365,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       hasStrongKeyword = true;
       detectionFormat = 'variant_format';
     }
-    // ── Legacy Chinese format ──
     else if (className.includes('易拉罐') || className.includes('铝')) {
       materialType = 'METAL_CAN';
       threshold = config.detection.METAL_CAN;
@@ -423,8 +424,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ============================================
   // MATERIAL NAME MAPPING
-  // AI detection returns English (PLASTIC_BOTTLE, METAL_CAN, GLASS)
-  // DB/backend stores Japanese (ペットボトル, ステール缶, etc.)
   // ============================================
   const MATERIAL_NAME_MAP: Record<string, string> = {
     'PLASTIC_BOTTLE': 'ペットボトル',
@@ -483,10 +482,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     const deviceType = 1;
     const currentModuleId = moduleIdRef.current;
 
-    if (!currentModuleId && action !== 'getModuleId') {
-      throw new Error('Module ID not available');
-    }
-
     let apiUrl: string;
     let apiPayload: any;
 
@@ -498,7 +493,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         break;
       case 'closeGate':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
-        // Agent uses type '01' for close (not '00')
         apiPayload = { moduleId: currentModuleId, motorId: '01', type: '01', deviceType };
         log('🚪 Closing gate...', 'info');
         break;
@@ -553,7 +547,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config, log]);
 
   // ============================================
-  // CONTINUOUS COMPACTOR MANAGEMENT (from agent)
+  // CONTINUOUS COMPACTOR MANAGEMENT
   // ============================================
   const stopCompactor = useCallback(async () => {
     const s = stateRef.current;
@@ -604,7 +598,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     }
 
     if (s.compactorRunning) {
-      // Already running — just reset idle timer
       resetCompactorIdleTimer();
       return;
     }
@@ -638,18 +631,16 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     }
   }, []);
 
-  // Forward-declared ref for functions that need mutual references
+  // Forward-declared refs for mutual recursion
   const scheduleNextPhotoRef = useRef<() => Promise<void>>();
   const executeAutoCycleRef = useRef<() => Promise<void>>();
   const executeRejectionCycleRef = useRef<() => Promise<void>>();
   const resetSystemRef = useRef<(forceStop?: boolean) => Promise<SessionSummary | null>>();
 
-  // ── handleSessionTimeout ──
   const handleSessionTimeout = useCallback(async (reason: string) => {
     const s = stateRef.current;
     log(`⏱️ Session timeout: ${reason}`, 'warn');
 
-    // Close gate immediately on timeout (agent pattern)
     log('🚪 Closing gate immediately (timeout)', 'warn');
     try {
       await executeCommand('closeGate');
@@ -657,7 +648,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     } catch (err: any) {
       log(`❌ Gate close error: ${err.message}`, 'error');
     }
-    // Double-close safety
     try {
       await executeCommand('closeGate');
       await delay(300);
@@ -703,7 +693,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config.timing.sessionMaxDuration, resetInactivityTimer, handleSessionTimeout]);
 
   // ============================================
-  // REJECTION CYCLE (from agent)
+  // REJECTION CYCLE
   // ============================================
   const executeRejectionCycle = useCallback(async () => {
     const s = stateRef.current;
@@ -738,8 +728,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config, executeCommand, trackDetectionAttempt, log]);
 
   // ============================================
-  // AUTO CYCLE (from agent — with continuous
-  // compactor, cycle timing, early backend call)
+  // AUTO CYCLE (⚡ SPEED OPTIMIZED)
   // ============================================
   const executeAutoCycle = useCallback(async () => {
     const s = stateRef.current;
@@ -752,7 +741,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     const cycleStartTime = Date.now();
 
-    // Use refs for accurate counts (avoids stale closure)
     itemsProcessedRef.current += 1;
     totalWeightRef.current += s.weight.weight;
     const newItemsProcessed = itemsProcessedRef.current;
@@ -775,7 +763,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       timestamp: new Date().toISOString(),
     };
 
-    // Update item counts (match by Japanese name since itemCounts uses Japanese)
     const japaneseName = getJapaneseMaterialName(itemData.material);
     setItemCounts(prev => {
       const idx = prev.findIndex(m => m.materialName === japaneseName);
@@ -792,12 +779,12 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     setStatusMessage(`Processing ${itemData.material}...`);
     setIsProcessing(true);
 
-    // Record to backend IMMEDIATELY (agent pattern — DB writes while motors run)
+    // Record to backend IMMEDIATELY (DB writes while motors run)
     recordItemToBackend(itemData);
 
     try {
-      // Start compactor (continuous mode)
-      await startContinuousCompactor();
+      // ⚡ Fire-and-forget compactor start
+      startContinuousCompactor().catch(err => log(`Compactor bg error: ${err.message}`, 'error'));
 
       // Belt to stepper
       await executeCommand('customMotor', config.motors.belt.toStepper);
@@ -814,12 +801,14 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       // Item drop delay
       await delay(config.timing.itemDropDelay);
 
-      // Reset idle timer (item just dropped)
       resetCompactorIdleTimer();
 
-      // Return stepper home
-      await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
-      await delay(config.timing.stepperReset);
+      // ⚡ Fire stepper home but DON'T wait - overlap with next detection
+      executeCommand('stepperMotor', { position: config.motors.stepper.positions.home })
+        .catch(err => log(`Stepper home error: ${err.message}`, 'error'));
+
+      // ⚡ Small buffer to let stepper command register
+      await delay(200);
 
       trackCycleTime(cycleStartTime);
       resetInactivityTimer();
@@ -847,9 +836,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       recordItemToBackend, trackCycleTime, trackDetectionAttempt, resetInactivityTimer, log]);
 
   // ============================================
-  // PHOTO DETECTION WITH POSITIONING
-  // (From agent — weight pre-check, belt
-  //  positioning, settle, then photo)
+  // PHOTO DETECTION WITH POSITIONING (⚡ OPTIMIZED)
   // ============================================
   const scheduleNextPhotoWithPositioning = useCallback(async () => {
     const s = stateRef.current;
@@ -861,7 +848,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     s.autoPhotoTimer = setTimeout(async () => {
       if (!s.autoCycleEnabled || s.cycleInProgress || s.awaitingDetection) return;
 
-      // Ensure belt is stopped before weight check
+      // ⚡ Single belt stop before weight check
       try {
         await executeCommand('customMotor', config.motors.belt.stop);
         await delay(config.timing.positionSettle);
@@ -872,8 +859,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log('🔍 Checking weight for item presence...', 'info');
 
       try {
+        // ⚡ getWeight already includes weightDelay internally
         await executeCommand('getWeight');
-        await delay(config.timing.weightDelay);
 
         if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
           log(`⚖️ No item detected (weight: ${s.weight ? s.weight.weight + 'g' : 'null'}) - waiting...`, 'debug');
@@ -886,7 +873,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         }
 
         log(`✅ Item detected (${s.weight.weight}g) - proceeding to position`, 'success');
-        s.weight = null; // Clear — will re-measure after photo
+        s.weight = null;
 
       } catch (err: any) {
         log(`Weight check error: ${err.message}`, 'error');
@@ -901,17 +888,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       try {
         if (config.detection.positionBeforePhoto) {
-          // Stop belt + settle
-          log('🛑 Ensuring belt is stopped before positioning...', 'debug');
-          await executeCommand('customMotor', config.motors.belt.stop);
-          await delay(config.timing.positionSettle);
-
-          // Move to camera position
+          // ⚡ Belt already stopped from above - go straight to positioning
           log('🔄 Moving belt to camera position...', 'info');
           await executeCommand('customMotor', config.motors.belt.toWeight);
           await delay(config.timing.beltToWeight);
 
-          // Stop + settle
           await executeCommand('customMotor', config.motors.belt.stop);
           await delay(config.timing.positionSettle);
 
@@ -919,7 +900,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           log('✅ Item positioned at camera', 'camera');
         }
 
-        // Take photo
         log('📸 Taking photo...', 'camera');
         await executeCommand('takePhoto');
         log('📸 Photo command sent - waiting for AI result...', 'camera');
@@ -938,7 +918,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           await scheduleNextPhotoRef.current?.();
         }
       }
-    }, 500);
+    }, 100);  // ⚡ was 500ms
   }, [config, executeCommand, log]);
 
   // Keep refs updated for mutual recursion
@@ -950,8 +930,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     [executeRejectionCycle]);
 
   // ============================================
-  // RESET SYSTEM (from agent — double gate-close,
-  // compactor wait, session end notify)
+  // RESET SYSTEM
   // ============================================
   const resetSystemForNextUser = useCallback(async (forceStop: boolean = false): Promise<SessionSummary | null> => {
     const s = stateRef.current;
@@ -965,7 +944,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     s.resetting = true;
 
-    // Close gate IMMEDIATELY — double-close for safety (agent pattern)
     log('🚪 Closing gate immediately (session ended)...', 'info');
     try {
       await executeCommand('closeGate');
@@ -980,7 +958,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log('✅ Gate close confirmed (attempt 2)', 'success');
     } catch (_) { /* ignore */ }
 
-    // Stop accepting new items
     s.autoCycleEnabled = false;
     s.awaitingDetection = false;
 
@@ -989,7 +966,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       s.autoPhotoTimer = null;
     }
 
-    // Wait for cycle completion if needed
     if (s.cycleInProgress) {
       log('⏳ Cycle in progress - waiting...', 'info');
       const maxWait = 60000;
@@ -1019,7 +995,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log(`❌ Reset error: ${err.message}`, 'error');
     }
 
-    // Notify backend that session ended
     if (s.sessionCode) {
       try {
         log(`📤 Notifying backend: Session ended (${s.sessionCode})`, 'info');
@@ -1046,7 +1021,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       duration: s.sessionStartTime ? Date.now() - s.sessionStartTime.getTime() : 0,
     };
 
-    // Reset all internal state
     s.aiResult = null;
     s.weight = null;
     s.currentUserId = null;
@@ -1060,7 +1034,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     clearSessionTimers();
 
-    // Reset exposed state
     setSessionCode(null);
     setCurrentUser(null);
     setSessionActive(false);
@@ -1082,7 +1055,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     return sessionSummary;
   }, [config, executeCommand, stopCompactor, clearSessionTimers, log]);
 
-  // Keep ref updated
   useEffect(() => { resetSystemRef.current = resetSystemForNextUser; },
     [resetSystemForNextUser]);
 
@@ -1118,7 +1090,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     startSessionTimers();
 
-    // Initialize hardware (agent pattern)
     await executeCommand('customMotor', config.motors.belt.stop);
     await stopCompactor();
 
@@ -1135,7 +1106,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     setStatus('ready');
     setStatusMessage('Ready for item - Place your bottle');
 
-    // Wait before first detection (agent waits 4s)
     await delay(4000);
     await scheduleNextPhotoWithPositioning();
   }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning, log]);
@@ -1152,6 +1122,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       log('🎬 Starting GUEST session...', 'info');
 
+      // ✅ Uses dynamic device ID
       const url = `${config.backend.url}/api/rvm/${config.device.id}/guest/start`;
       log(`📡 Calling: ${url}`, 'info');
 
@@ -1198,7 +1169,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
         startSessionTimers();
 
-        // Initialize hardware (agent pattern)
         await executeCommand('customMotor', config.motors.belt.stop);
         await stopCompactor();
 
@@ -1215,7 +1185,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         setStatusMessage('Ready - Place your recyclables');
         setIsProcessing(false);
 
-        // Wait before first detection (agent waits 4s)
         log('⏳ Waiting 4 seconds for first item...', 'info');
         await delay(4000);
         await scheduleNextPhotoWithPositioning();
@@ -1260,7 +1229,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       log('🏁 Ending session...', 'info');
 
-      // Stop auto operations immediately
       s.autoCycleEnabled = false;
       s.awaitingDetection = false;
       if (s.autoPhotoTimer) {
@@ -1268,7 +1236,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         s.autoPhotoTimer = null;
       }
 
-      // Double gate-close immediately (agent pattern)
       try {
         await executeCommand('closeGate');
         await delay(400);
@@ -1278,7 +1245,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         await delay(400);
       } catch (_) { /* ignore */ }
 
-      // Wait for any ongoing cycle
       if (s.cycleInProgress) {
         log('⏳ Waiting for cycle to complete...', 'info');
         const maxWait = 60000;
@@ -1288,7 +1254,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         }
       }
 
-      // Call backend to end session
       const response = await fetch(
         `${config.backend.url}/api/rvm/local/session/end`,
         {
@@ -1307,8 +1272,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       if (data.success) {
         log(`✅ Session ended: ${data.summary?.totalPoints || 0} points`, 'success');
 
-        // Reset hardware
-        s.resetting = false; // Ensure no lock
+        s.resetting = false;
         await resetSystemForNextUser(false);
 
         setIsProcessing(false);
@@ -1353,26 +1317,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [config, executeCommand, stopCompactor, log]);
 
   // ============================================
-  // WEBSOCKET & MODULE ID
-  // (Defined as stable refs — actual WS logic
-  //  lives in the init useEffect below)
-  // ============================================
-
-  // const requestModuleId = useCallback(async () => {
-  //   try {
-  //     await fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
-  //       method: 'POST',
-  //       headers: { 'Content-Type': 'application/json' },
-  //       body: JSON.stringify({}),
-  //       signal: AbortSignal.timeout(5000),
-  //     });
-  //     log('📟 Module ID requested', 'info');
-  //   } catch (err: any) {
-  //     log(`❌ Module ID request failed: ${err.message}`, 'error');
-  //   }
-  // }, [config, log]);
-
-  // ============================================
   // BIN STATUS MANAGEMENT
   // ============================================
   const resetBinStatus = useCallback((binKey?: keyof BinStatus) => {
@@ -1390,7 +1334,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   }, [log]);
 
   // ============================================
-  // DIAGNOSTICS (from agent)
+  // DIAGNOSTICS
   // ============================================
   const runDiagnostics = useCallback(() => {
     const s = stateRef.current;
@@ -1401,8 +1345,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     console.log('\n' + '='.repeat(60));
     console.log('🔬 SYSTEM DIAGNOSTICS');
     console.log('='.repeat(60));
-    console.log(`  Module ID:       ${moduleIdRef.current}`);
     console.log(`  Device ID:       ${config.device.id}`);
+    console.log(`  Module ID:       ${moduleIdRef.current} (HARDCODED)`);
     console.log(`  Auto Cycle:      ${s.autoCycleEnabled}`);
     console.log(`  Cycle In Prog:   ${s.cycleInProgress}`);
     console.log(`  Resetting:       ${s.resetting}`);
@@ -1420,38 +1364,33 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     if (s.averageCycleTime) {
       console.log(`  Avg Cycle Time: ${Math.round(s.averageCycleTime)}ms`);
     }
+    console.log('  ⚡ SPEED OPTIMIZED');
     console.log('='.repeat(60) + '\n');
   }, [config.device.id]);
 
   // ============================================
   // INITIALIZATION
   // ============================================
-
-  // Store latest callbacks in refs so the WS handler always calls the current version
   const determineMaterialTypeRef = useRef(determineMaterialType);
   const executeCommandRef = useRef(executeCommand);
   const handleSessionTimeoutRef = useRef(handleSessionTimeout);
-  // const requestModuleIdRef = useRef(requestModuleId);
-  const moduleIdRetryRef = useRef(0);
-  const MAX_MODULE_ID_RETRIES = 10;
 
   useEffect(() => { determineMaterialTypeRef.current = determineMaterialType; }, [determineMaterialType]);
   useEffect(() => { executeCommandRef.current = executeCommand; }, [executeCommand]);
   useEffect(() => { handleSessionTimeoutRef.current = handleSessionTimeout; }, [handleSessionTimeout]);
-  // useEffect(() => { requestModuleIdRef.current = requestModuleId; }, [requestModuleId]);
 
-  // Single stable init — runs ONCE, never re-creates WebSocket on re-renders
+  // Single stable init — runs ONCE
   useEffect(() => {
     log('========================================', 'info');
-    log('🚀 RVM CONTROL SYSTEM STARTING...', 'info');
+    log(`🚀 RVM CONTROL - Device: ${config.device.id}`, 'info');
+    log('⚡ SPEED OPTIMIZED | Module ID: 09 (hardcoded)', 'info');
     log('========================================', 'info');
 
-    let destroyed = false; // cleanup flag to prevent actions after unmount
+    let destroyed = false;
 
     function connectWS() {
       if (destroyed) return;
 
-      // Close any existing connection
       if (wsRef.current) {
         try {
           wsRef.current.onclose = null;
@@ -1468,16 +1407,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       ws.onopen = () => {
         if (destroyed) return;
         console.log('[WS] ✅ WebSocket connected');
-
-        // Request moduleId now that WS is ready to receive the response
-        if (!moduleIdRef.current) {
-          setTimeout(() => {
-            if (!destroyed && !moduleIdRef.current) {
-              console.log('[WS] 📟 Requesting Module ID...');
-              // requestModuleIdRef.current();
-            }
-          }, 1000);
-        }
+        // ✅ Module ID hardcoded - system is immediately ready
+        setIsReady(true);
+        setStatus('ready');
+        setStatusMessage('System ready');
       };
 
       ws.onmessage = async (event) => {
@@ -1486,15 +1419,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           const message = JSON.parse(event.data as string);
           const s = stateRef.current;
 
-          // ── Module ID ──
+          // ✅ Ignore moduleId from WS - using hardcoded value
           if (message.function === '01') {
-            setModuleId(message.moduleId);
-            moduleIdRef.current = message.moduleId;
-            moduleIdRetryRef.current = 0;
-            setIsReady(true);
-            setStatus('ready');
-            setStatusMessage('System ready');
-            console.log(`[WS] ✅ Module ID received: ${message.moduleId}`);
+            console.log(`[WS] ℹ️ WS moduleId: ${message.moduleId} (ignored - hardcoded 09)`);
             return;
           }
 
@@ -1516,7 +1443,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             if (s.autoCycleEnabled && s.awaitingDetection) {
               s.awaitingDetection = false;
               console.log('[WS] 🔍 AI detection complete - measuring weight...');
-              setTimeout(() => executeCommandRef.current('getWeight'), 300);
+              setTimeout(() => executeCommandRef.current('getWeight'), 100);  // ⚡ was 300ms
             }
             return;
           }
@@ -1536,18 +1463,16 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
             console.log(`[WS] ⚖️ Weight: ${s.weight.weight}g`);
 
-            // Calibration retry for zero weight
             if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
               s.calibrationAttempts++;
               setTimeout(async () => {
                 await executeCommandRef.current('calibrateWeight');
                 setTimeout(() => executeCommandRef.current('getWeight'), config.timing.calibrationDelay);
-              }, 500);
+              }, 200);  // ⚡ was 500ms
               return;
             }
             if (s.weight.weight > 0) s.calibrationAttempts = 0;
 
-            // Handle detection result + weight together
             if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
               console.log(`[WS] ⚖️ Final weight: ${s.weight.weight}g`);
 
@@ -1563,13 +1488,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
               if (s.aiResult.materialType === 'UNKNOWN') {
                 console.log('[WS] ❌ Unknown material - rejecting');
                 s.cycleInProgress = true;
-                setTimeout(() => executeRejectionCycleRef.current?.(), 500);
+                executeRejectionCycleRef.current?.();  // ⚡ no setTimeout
                 return;
               }
 
               console.log('[WS] ✅ Starting auto cycle...');
               s.cycleInProgress = true;
-              setTimeout(() => executeAutoCycleRef.current?.(), 500);
+              executeAutoCycleRef.current?.();  // ⚡ no setTimeout
             }
             return;
           }
@@ -1628,24 +1553,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       };
     }
 
-    // Connect WebSocket
     connectWS();
-
-    // Retry moduleId every 5s if not received
-    const moduleIdRetryInterval = setInterval(() => {
-      if (destroyed) return;
-      if (!moduleIdRef.current && moduleIdRetryRef.current < MAX_MODULE_ID_RETRIES) {
-        moduleIdRetryRef.current++;
-        console.log(`[WS] 📟 Module ID retry #${moduleIdRetryRef.current}...`);
-        // requestModuleIdRef.current();
-      } else if (moduleIdRef.current) {
-        clearInterval(moduleIdRetryInterval);
-      }
-    }, 5000);
 
     return () => {
       destroyed = true;
-      clearInterval(moduleIdRetryInterval);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
@@ -1660,13 +1571,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       if (s.compactorIdleTimer) clearTimeout(s.compactorIdleTimer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // EMPTY DEPS — runs once, never re-creates WebSocket
+  }, []);
 
-  // Fetch accepted materials
+  // ✅ Fetch accepted materials using dynamic device ID
   useEffect(() => {
     const fetchAcceptedMaterials = async () => {
       try {
-        const response = await fetch(`${keys?.base_url}api/rvm/RVM-3102/materials`);
+        const response = await fetch(`${keys?.base_url}api/rvm/${config.device.id}/materials`);
         const data = await response?.json();
         const materials = data?.materials?.map((m: { id: string; materialName: string }) => ({
           materialName: m?.materialName,
