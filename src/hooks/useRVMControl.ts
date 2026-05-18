@@ -1358,19 +1358,19 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   //  lives in the init useEffect below)
   // ============================================
 
-  const requestModuleId = useCallback(async () => {
-    try {
-      await fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-        signal: AbortSignal.timeout(5000),
-      });
-      log('📟 Module ID requested', 'info');
-    } catch (err: any) {
-      log(`❌ Module ID request failed: ${err.message}`, 'error');
-    }
-  }, [config, log]);
+  // const requestModuleId = useCallback(async () => {
+  //   try {
+  //     await fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
+  //       method: 'POST',
+  //       headers: { 'Content-Type': 'application/json' },
+  //       body: JSON.stringify({}),
+  //       signal: AbortSignal.timeout(5000),
+  //     });
+  //     log('📟 Module ID requested', 'info');
+  //   } catch (err: any) {
+  //     log(`❌ Module ID request failed: ${err.message}`, 'error');
+  //   }
+  // }, [config, log]);
 
   // ============================================
   // BIN STATUS MANAGEMENT
@@ -1431,14 +1431,14 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const determineMaterialTypeRef = useRef(determineMaterialType);
   const executeCommandRef = useRef(executeCommand);
   const handleSessionTimeoutRef = useRef(handleSessionTimeout);
-  const requestModuleIdRef = useRef(requestModuleId);
+  // const requestModuleIdRef = useRef(requestModuleId);
   const moduleIdRetryRef = useRef(0);
   const MAX_MODULE_ID_RETRIES = 10;
 
   useEffect(() => { determineMaterialTypeRef.current = determineMaterialType; }, [determineMaterialType]);
   useEffect(() => { executeCommandRef.current = executeCommand; }, [executeCommand]);
   useEffect(() => { handleSessionTimeoutRef.current = handleSessionTimeout; }, [handleSessionTimeout]);
-  useEffect(() => { requestModuleIdRef.current = requestModuleId; }, [requestModuleId]);
+  // useEffect(() => { requestModuleIdRef.current = requestModuleId; }, [requestModuleId]);
 
   // Single stable init — runs ONCE, never re-creates WebSocket on re-renders
   useEffect(() => {
@@ -1474,7 +1474,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           setTimeout(() => {
             if (!destroyed && !moduleIdRef.current) {
               console.log('[WS] 📟 Requesting Module ID...');
-              requestModuleIdRef.current();
+              // requestModuleIdRef.current();
             }
           }, 1000);
         }
@@ -1637,7 +1637,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       if (!moduleIdRef.current && moduleIdRetryRef.current < MAX_MODULE_ID_RETRIES) {
         moduleIdRetryRef.current++;
         console.log(`[WS] 📟 Module ID retry #${moduleIdRetryRef.current}...`);
-        requestModuleIdRef.current();
+        // requestModuleIdRef.current();
       } else if (moduleIdRef.current) {
         clearInterval(moduleIdRetryInterval);
       }
