@@ -454,7 +454,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            material: getJapaneseMaterialName(itemData.material),
+            material: itemData.material,  // ✅ Send English enum (PLASTIC_BOTTLE, METAL_CAN) — backend materialTypeMap expects this
             weight: itemData.weight,
             confidence: itemData.confidence / 100,
           }),
@@ -531,15 +531,24 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     }
 
     try {
-      await fetch(apiUrl, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(apiPayload),
         signal: AbortSignal.timeout(config.local.timeout),
       });
 
+      // ✅ Log response status for debugging
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        log(`⚠️ ${action} HTTP ${response.status}: ${text.substring(0, 100)}`, 'warn');
+      }
+
       if (action === 'takePhoto') await delay(config.timing.photoDelay);
-      if (action === 'getWeight') await delay(config.timing.weightDelay);
+      if (action === 'getWeight') {
+        log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting ${config.timing.weightDelay}ms for WS response`, 'debug');
+        await delay(config.timing.weightDelay);
+      }
     } catch (err: any) {
       log(`❌ ${action} failed: ${err.message}`, 'error');
       throw err;
@@ -859,6 +868,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log('🔍 Checking weight for item presence...', 'info');
 
       try {
+        // Log WS state before calling getWeight
+        const wsState = wsRef.current?.readyState;
+        const wsStates = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+        log(`📡 WS state: ${wsStates[wsState ?? 3] || 'NULL'} | moduleId: ${moduleIdRef.current}`, 'debug');
+
         // getWeight HTTP call triggers the measurement (includes internal 600ms delay)
         // But the actual weight VALUE arrives via WebSocket (function '06')
         // We need an EXTRA delay to let the WS response arrive and populate s.weight
@@ -1410,10 +1424,18 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       ws.onopen = () => {
         if (destroyed) return;
         console.log('[WS] ✅ WebSocket connected');
-        // ✅ Module ID hardcoded - system is immediately ready
-        setIsReady(true);
-        setStatus('ready');
-        setStatusMessage('System ready');
+        // Request moduleId from hardware — it will respond via WS function '01'
+        setTimeout(() => {
+          if (!destroyed) {
+            console.log('[WS] 📟 Requesting Module ID from hardware...');
+            fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
+              signal: AbortSignal.timeout(5000),
+            }).catch(err => console.error(`[WS] Module ID request failed: ${err.message}`));
+          }
+        }, 1000);
       };
 
       ws.onmessage = async (event) => {
@@ -1422,9 +1444,15 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           const message = JSON.parse(event.data as string);
           const s = stateRef.current;
 
-          // ✅ Ignore moduleId from WS - using hardcoded value
+          // ✅ Accept moduleId from WS - hardware knows the correct value
           if (message.function === '01') {
-            console.log(`[WS] ℹ️ WS moduleId: ${message.moduleId} (ignored - hardcoded 09)`);
+            const wsModuleId = message.moduleId;
+            console.log(`[WS] ✅ Module ID from hardware: ${wsModuleId}`);
+            setModuleId(wsModuleId);
+            moduleIdRef.current = wsModuleId;
+            setIsReady(true);
+            setStatus('ready');
+            setStatusMessage('System ready');
             return;
           }
 
@@ -1539,6 +1567,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             }
             return;
           }
+
+          // ✅ Log any unhandled WS messages for debugging
+          console.log(`[WS] 📨 Unhandled message: function=${message.function}, data=${JSON.stringify(message.data).substring(0, 100)}`);
+
         } catch (err: any) {
           console.error(`[WS] ❌ Message error: ${err.message}`);
         }
