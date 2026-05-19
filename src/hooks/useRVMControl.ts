@@ -544,11 +544,25 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         log(`⚠️ ${action} HTTP ${response.status}: ${text.substring(0, 100)}`, 'warn');
       }
 
+      // ✅ Try to read response body — WorldLucky may return data in HTTP response
+      let responseData: any = null;
+      try {
+        const text = await response.text();
+        if (text) {
+          responseData = JSON.parse(text);
+          if (action === 'getWeight' || action === 'takePhoto' || action === 'calibrateWeight') {
+            console.log(`[HTTP] 📩 ${action} response:`, JSON.stringify(responseData).substring(0, 200));
+          }
+        }
+      } catch (_) { /* no JSON body */ }
+
       if (action === 'takePhoto') await delay(config.timing.photoDelay);
       if (action === 'getWeight') {
         log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting ${config.timing.weightDelay}ms for WS response`, 'debug');
         await delay(config.timing.weightDelay);
       }
+
+      return responseData;
     } catch (err: any) {
       log(`❌ ${action} failed: ${err.message}`, 'error');
       throw err;
@@ -1424,24 +1438,30 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       ws.onopen = () => {
         if (destroyed) return;
         console.log('[WS] ✅ WebSocket connected');
-        // Request moduleId from hardware — it will respond via WS function '01'
-        setTimeout(() => {
-          if (!destroyed) {
-            console.log('[WS] 📟 Requesting Module ID from hardware...');
-            fetch(`${config.local.baseUrl}/system/serial/getModuleId`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({}),
-              signal: AbortSignal.timeout(5000),
-            }).catch(err => console.error(`[WS] Module ID request failed: ${err.message}`));
-          }
-        }, 1000);
+        // moduleId hardcoded to 09 — no getModuleId call needed
+        setIsReady(true);
+        setStatus('ready');
+        setStatusMessage('System ready');
       };
 
       ws.onmessage = async (event) => {
         if (destroyed) return;
         try {
-          const message = JSON.parse(event.data as string);
+          // ✅ Browser WS may receive data as Blob, not string
+          let rawData: string;
+          if (typeof event.data === 'string') {
+            rawData = event.data;
+          } else if (event.data instanceof Blob) {
+            rawData = await event.data.text();
+          } else if (event.data instanceof ArrayBuffer) {
+            rawData = new TextDecoder().decode(event.data);
+          } else {
+            rawData = String(event.data);
+          }
+          
+          console.log(`[WS] 📩 RAW: ${rawData.substring(0, 200)}`);
+          
+          const message = JSON.parse(rawData);
           const s = stateRef.current;
 
           // ✅ Accept moduleId from WS - hardware knows the correct value
