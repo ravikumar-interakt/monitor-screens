@@ -132,7 +132,6 @@ const DEVICE_ID: string =
 
 // ============================================
 // DEFAULT CONFIGURATION
-// ⚡ Timings match speed-optimized agent
 // ============================================
 const DEFAULT_CONFIG: RVMConfig = {
   device: {
@@ -203,7 +202,6 @@ const DEFAULT_CONFIG: RVMConfig = {
 // CUSTOM HOOK
 // ============================================
 export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
-  // ── Exposed state ──
   const [status, setStatus] = useState<RVMStatus>('idle');
   const [isReady, setIsReady] = useState(true);
   const [moduleId, setModuleId] = useState<string | null>('09');
@@ -224,7 +222,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     glass: false,
   });
 
-  // ── Internal refs (no re-renders) ──
   const wsRef = useRef<WebSocket | null>(null);
   const moduleIdRef = useRef<string | null>('09');
   const itemsProcessedRef = useRef(0);
@@ -247,19 +244,16 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     calibrationAttempts: 0,
     resetting: false,
     itemAlreadyPositioned: false,
-
     compactorRunning: false,
     compactorTimer: null as ReturnType<typeof setTimeout> | null,
     compactorIdleTimer: null as ReturnType<typeof setTimeout> | null,
     lastItemTime: null as number | null,
-
     binStatus: {
       plastic: false,
       metal: false,
       right: false,
       glass: false,
     } as BinStatus,
-
     lastCycleTime: null as number | null,
     averageCycleTime: null as number | null,
     cycleCount: 0,
@@ -279,7 +273,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   useEffect(() => { moduleIdRef.current = moduleId; }, [moduleId]);
 
   // ============================================
-  // UTILITY FUNCTIONS
+  // UTILITY
   // ============================================
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -288,10 +282,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     console.log(`[${timestamp}] [${type.toUpperCase()}] ${message}`);
   }, []);
 
-  // ============================================
-  // ✅ FIX: HELPER TO PARSE WEIGHT FROM RAW VALUE
-  // Same calibration logic used in both WS handler and HTTP fallback
-  // ============================================
   const parseWeight = useCallback((rawValue: number) => {
     const coefficient = config.weight.coefficients[1];
     const calibratedWeight = rawValue * (coefficient / 1000);
@@ -303,25 +293,16 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     };
   }, [config.weight.coefficients]);
 
-  // ============================================
-  // ✅ FIX: WAIT FOR WEIGHT WITH POLLING
-  // Polls stateRef.current.weight with timeout
-  // Matches how Node.js agent gets weight via WS
-  // ============================================
   const waitForWeight = useCallback(async (timeoutMs: number = 2000): Promise<any> => {
     const s = stateRef.current;
     const pollInterval = 100;
     let elapsed = 0;
-
     while (elapsed < timeoutMs) {
-      if (s.weight !== null) {
-        return s.weight;
-      }
+      if (s.weight !== null) return s.weight;
       await delay(pollInterval);
       elapsed += pollInterval;
     }
-
-    return null; // timeout - weight never arrived
+    return null;
   }, []);
 
   // ============================================
@@ -332,7 +313,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     const cycleTime = Date.now() - startTime;
     s.lastCycleTime = cycleTime;
     s.cycleCount++;
-
     if (s.averageCycleTime === null) {
       s.averageCycleTime = cycleTime;
     } else {
@@ -344,23 +324,16 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const trackDetectionAttempt = useCallback((success: boolean, retryCount: number) => {
     const stats = stateRef.current.detectionStats;
     stats.totalAttempts++;
-
     if (success) {
       if (retryCount === 0) stats.firstTimeSuccess++;
       else if (retryCount === 1) stats.secondTimeSuccess++;
       else if (retryCount === 2) stats.thirdTimeSuccess++;
-
-      stats.lastSuccessfulTiming = {
-        retries: retryCount,
-        timestamp: new Date().toISOString(),
-      };
+      stats.lastSuccessfulTiming = { retries: retryCount, timestamp: new Date().toISOString() };
     } else {
       stats.failures++;
     }
-
     const totalRetries = (stats.secondTimeSuccess * 1) + (stats.thirdTimeSuccess * 2);
     const successfulAttempts = stats.firstTimeSuccess + stats.secondTimeSuccess + stats.thirdTimeSuccess;
-
     if (successfulAttempts > 0) {
       stats.averageRetries = totalRetries / successfulAttempts;
     }
@@ -379,83 +352,36 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     let detectionFormat = 'unknown';
 
     if (className === '0-pet' || className.startsWith('0-pet')) {
-      materialType = 'PLASTIC_BOTTLE';
-      threshold = config.detection.PLASTIC_BOTTLE;
-      hasStrongKeyword = true;
-      detectionFormat = 'new_standard';
+      materialType = 'PLASTIC_BOTTLE'; threshold = config.detection.PLASTIC_BOTTLE; hasStrongKeyword = true; detectionFormat = 'new_standard';
     } else if (className === '1-can' || className.startsWith('1-can')) {
-      materialType = 'METAL_CAN';
-      threshold = config.detection.METAL_CAN;
-      hasStrongKeyword = true;
-      detectionFormat = 'new_standard';
-    }
-    else if (/^0[-_\s]*(pet|plastic|bottle)/i.test(className)) {
-      materialType = 'PLASTIC_BOTTLE';
-      threshold = config.detection.PLASTIC_BOTTLE;
-      hasStrongKeyword = true;
-      detectionFormat = 'variant_format';
+      materialType = 'METAL_CAN'; threshold = config.detection.METAL_CAN; hasStrongKeyword = true; detectionFormat = 'new_standard';
+    } else if (/^0[-_\s]*(pet|plastic|bottle)/i.test(className)) {
+      materialType = 'PLASTIC_BOTTLE'; threshold = config.detection.PLASTIC_BOTTLE; hasStrongKeyword = true; detectionFormat = 'variant_format';
     } else if (/^1[-_\s]*(can|metal|aluminum)/i.test(className)) {
-      materialType = 'METAL_CAN';
-      threshold = config.detection.METAL_CAN;
-      hasStrongKeyword = true;
-      detectionFormat = 'variant_format';
-    }
-    else if (className.includes('易拉罐') || className.includes('铝')) {
-      materialType = 'METAL_CAN';
-      threshold = config.detection.METAL_CAN;
-      hasStrongKeyword = true;
-      detectionFormat = 'legacy_chinese';
+      materialType = 'METAL_CAN'; threshold = config.detection.METAL_CAN; hasStrongKeyword = true; detectionFormat = 'variant_format';
+    } else if (className.includes('易拉罐') || className.includes('铝')) {
+      materialType = 'METAL_CAN'; threshold = config.detection.METAL_CAN; hasStrongKeyword = true; detectionFormat = 'legacy_chinese';
     } else if (className.includes('pet') || className.includes('瓶')) {
-      materialType = 'PLASTIC_BOTTLE';
-      threshold = config.detection.PLASTIC_BOTTLE;
-      hasStrongKeyword = className.includes('pet');
-      detectionFormat = 'legacy_keyword';
+      materialType = 'PLASTIC_BOTTLE'; threshold = config.detection.PLASTIC_BOTTLE; hasStrongKeyword = className.includes('pet'); detectionFormat = 'legacy_keyword';
     } else if (className.includes('metal') || className.includes('can')) {
-      materialType = 'METAL_CAN';
-      threshold = config.detection.METAL_CAN;
-      hasStrongKeyword = false;
-      detectionFormat = 'legacy_keyword';
+      materialType = 'METAL_CAN'; threshold = config.detection.METAL_CAN; hasStrongKeyword = false; detectionFormat = 'legacy_keyword';
     } else if (className.includes('plastic') || className.includes('bottle')) {
-      materialType = 'PLASTIC_BOTTLE';
-      threshold = config.detection.PLASTIC_BOTTLE;
-      hasStrongKeyword = false;
-      detectionFormat = 'legacy_keyword';
+      materialType = 'PLASTIC_BOTTLE'; threshold = config.detection.PLASTIC_BOTTLE; hasStrongKeyword = false; detectionFormat = 'legacy_keyword';
     } else if (className.includes('玻璃') || className.includes('glass')) {
-      materialType = 'GLASS';
-      threshold = config.detection.GLASS;
-      hasStrongKeyword = className.includes('玻璃');
-      detectionFormat = 'glass_detected';
+      materialType = 'GLASS'; threshold = config.detection.GLASS; hasStrongKeyword = className.includes('玻璃'); detectionFormat = 'glass_detected';
     }
 
-    const confidencePercent = Math.round(probability * 100);
-
-    if (probability < config.detection.minConfidenceRetry && materialType === 'UNKNOWN') {
-      return 'UNKNOWN';
-    }
+    if (probability < config.detection.minConfidenceRetry && materialType === 'UNKNOWN') return 'UNKNOWN';
 
     if (materialType !== 'UNKNOWN' && probability < threshold) {
       const relaxedThreshold = detectionFormat === 'new_standard' ? threshold * 0.70 : threshold * 0.80;
-
-      if (hasStrongKeyword && probability >= relaxedThreshold) {
-        log(`🎯 ${materialType} detected (${confidencePercent}% - keyword match)`, 'detection');
-        return materialType;
-      }
-
-      if (detectionFormat === 'new_standard' && probability >= 0.45) {
-        log(`🎯 ${materialType} detected (${confidencePercent}% - standard format)`, 'detection');
-        return materialType;
-      }
-
-      log(`❌ Low confidence: ${confidencePercent}%`, 'warn');
+      if (hasStrongKeyword && probability >= relaxedThreshold) return materialType;
+      if (detectionFormat === 'new_standard' && probability >= 0.45) return materialType;
       return 'UNKNOWN';
     }
 
-    if (materialType !== 'UNKNOWN') {
-      log(`✅ ${materialType} detected (${confidencePercent}%)`, 'detection');
-    }
-
     return materialType;
-  }, [config.detection, log]);
+  }, [config.detection]);
 
   // ============================================
   // MATERIAL NAME MAPPING
@@ -475,14 +401,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ============================================
   const recordItemToBackend = useCallback(async (itemData: ItemData) => {
     const s = stateRef.current;
-    if (!s.sessionCode) {
-      log('⚠️ No session code, skipping backend record', 'warn');
-      return;
-    }
-
+    if (!s.sessionCode) return;
     try {
-      log(`📤 Recording item to backend: ${itemData.material}`, 'info');
-
       const response = await fetch(
         `${config.backend.url}/api/rvm/session/${s.sessionCode}/item`,
         {
@@ -496,14 +416,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           signal: AbortSignal.timeout(config.backend.timeout),
         }
       );
-
       const data = await response.json();
-
       if (data.success) {
-        log(`✅ Item recorded: ${data.session.itemsProcessed} items, ${data.session.totalPoints} pts`, 'success');
         setTotalPoints(data.session.totalPoints);
-      } else {
-        log(`❌ Backend record failed: ${data.error}`, 'error');
       }
     } catch (err: any) {
       log(`❌ Backend API error: ${err.message}`, 'error');
@@ -512,7 +427,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ============================================
   // HARDWARE CONTROL
-  // ✅ FIX: getWeight now parses HTTP response as fallback
   // ============================================
   const executeCommand = useCallback(async (action: string, params: any = {}) => {
     const deviceType = 1;
@@ -525,12 +439,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       case 'openGate':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
         apiPayload = { moduleId: currentModuleId, motorId: '01', type: '03', deviceType };
-        log('🚪 Opening gate...', 'info');
         break;
       case 'closeGate':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
         apiPayload = { moduleId: currentModuleId, motorId: '01', type: '01', deviceType };
-        log('🚪 Closing gate...', 'info');
         break;
       case 'getWeight':
         apiUrl = `${config.local.baseUrl}/system/serial/getWeight`;
@@ -546,21 +458,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         break;
       case 'stepperMotor':
         apiUrl = `${config.local.baseUrl}/system/serial/stepMotorSelect`;
-        apiPayload = {
-          moduleId: config.motors.stepper.moduleId,
-          id: params.position,
-          type: params.position,
-          deviceType,
-        };
+        apiPayload = { moduleId: config.motors.stepper.moduleId, id: params.position, type: params.position, deviceType };
         break;
       case 'customMotor':
         apiUrl = `${config.local.baseUrl}/system/serial/motorSelect`;
-        apiPayload = {
-          moduleId: currentModuleId,
-          motorId: params.motorId,
-          type: params.type,
-          deviceType,
-        };
+        apiPayload = { moduleId: currentModuleId, motorId: params.motorId, type: params.type, deviceType };
         break;
       default:
         throw new Error(`Unknown action: ${action}`);
@@ -574,62 +476,32 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         signal: AbortSignal.timeout(config.local.timeout),
       });
 
-      // ✅ FIX: Read response body EXACTLY ONCE — .text() can only be called once on a Response
+      // Read body exactly once
       let responseText = '';
-      try {
-        responseText = await response.text();
-      } catch (_) { /* empty body */ }
-
-      if (!response.ok) {
-        log(`⚠️ ${action} HTTP ${response.status}: ${responseText.substring(0, 100)}`, 'warn');
-      }
+      try { responseText = await response.text(); } catch (_) {}
 
       let responseData: any = null;
       if (responseText) {
-        try {
-          responseData = JSON.parse(responseText);
-        } catch (_) { /* not JSON */ }
+        try { responseData = JSON.parse(responseText); } catch (_) {}
       }
 
-      if (action === 'getWeight' || action === 'takePhoto' || action === 'calibrateWeight') {
-        console.log(`[HTTP] 📩 ${action} response:`, responseText.substring(0, 300));
-      }
-
-      // ✅ FIX: Parse weight from HTTP response
-      // Hardware returns: {"moduleId":"09","function":"06","data":"19","comId":"COM1"}
-      // The weight value is in responseData.data as a STRING
-      // This is the SAME format as WS messages — function '06' = weight
+      // Parse weight from HTTP response if hardware returns it
+      // Hardware format: {"moduleId":"09","function":"06","data":"19","comId":"COM1"}
       if (action === 'getWeight' && responseData) {
         const s = stateRef.current;
-
         if (responseData.function === '06' && responseData.data !== undefined) {
-          // ✅ Exact same format as WS weight message
           const weightValue = parseFloat(responseData.data) || 0;
-          const parsed = parseWeight(weightValue);
-          s.weight = parsed;
-          console.log(`[HTTP] ⚖️ Weight from HTTP: ${parsed.weight}g (raw: ${weightValue}, data: "${responseData.data}")`);
+          s.weight = parseWeight(weightValue);
         } else if (responseData.data !== undefined && responseData.data !== null) {
-          // Fallback: data field exists but no function field
           const weightValue = parseFloat(responseData.data) || 0;
-          if (weightValue > 0) {
-            const parsed = parseWeight(weightValue);
-            s.weight = parsed;
-            console.log(`[HTTP] ⚖️ Weight from HTTP (data field): ${parsed.weight}g (raw: ${weightValue})`);
-          }
+          if (weightValue > 0) s.weight = parseWeight(weightValue);
         } else if (responseData.weight !== undefined) {
           const weightValue = parseFloat(responseData.weight) || 0;
-          if (weightValue > 0) {
-            const parsed = parseWeight(weightValue);
-            s.weight = parsed;
-            console.log(`[HTTP] ⚖️ Weight from HTTP (weight field): ${parsed.weight}g`);
-          }
+          if (weightValue > 0) s.weight = parseWeight(weightValue);
         }
       }
 
       if (action === 'takePhoto') await delay(config.timing.photoDelay);
-      if (action === 'getWeight') {
-        log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting for WS/HTTP response`, 'debug');
-      }
 
       return responseData;
     } catch (err: any) {
@@ -644,62 +516,33 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const stopCompactor = useCallback(async () => {
     const s = stateRef.current;
     if (!s.compactorRunning) return;
-
     try {
       await executeCommand('customMotor', config.motors.compactor.stop);
-      log('🔨 Compactor stopped', 'crusher');
     } catch (err: any) {
       log(`Compactor stop error: ${err.message}`, 'error');
     }
-
     s.compactorRunning = false;
-
-    if (s.compactorTimer) {
-      clearTimeout(s.compactorTimer);
-      s.compactorTimer = null;
-    }
-    if (s.compactorIdleTimer) {
-      clearTimeout(s.compactorIdleTimer);
-      s.compactorIdleTimer = null;
-    }
+    if (s.compactorTimer) { clearTimeout(s.compactorTimer); s.compactorTimer = null; }
+    if (s.compactorIdleTimer) { clearTimeout(s.compactorIdleTimer); s.compactorIdleTimer = null; }
   }, [config.motors.compactor, executeCommand, log]);
 
   const resetCompactorIdleTimer = useCallback(() => {
     const s = stateRef.current;
-
-    if (s.compactorIdleTimer) {
-      clearTimeout(s.compactorIdleTimer);
-    }
-
+    if (s.compactorIdleTimer) clearTimeout(s.compactorIdleTimer);
     s.lastItemTime = Date.now();
-
     s.compactorIdleTimer = setTimeout(async () => {
-      if (s.compactorRunning && s.autoCycleEnabled) {
-        log('🔨 No items detected - stopping compactor (idle)', 'crusher');
-        await stopCompactor();
-      }
+      if (s.compactorRunning && s.autoCycleEnabled) await stopCompactor();
     }, config.timing.compactorIdleStop);
-  }, [config.timing.compactorIdleStop, stopCompactor, log]);
+  }, [config.timing.compactorIdleStop, stopCompactor]);
 
   const startContinuousCompactor = useCallback(async () => {
     const s = stateRef.current;
-
-    if (s.compactorIdleTimer) {
-      clearTimeout(s.compactorIdleTimer);
-      s.compactorIdleTimer = null;
-    }
-
-    if (s.compactorRunning) {
-      resetCompactorIdleTimer();
-      return;
-    }
-
+    if (s.compactorIdleTimer) { clearTimeout(s.compactorIdleTimer); s.compactorIdleTimer = null; }
+    if (s.compactorRunning) { resetCompactorIdleTimer(); return; }
     try {
       await executeCommand('customMotor', config.motors.compactor.start);
       s.compactorRunning = true;
       s.lastItemTime = Date.now();
-      log('🔨 Compactor started', 'crusher');
-
       resetCompactorIdleTimer();
     } catch (err: any) {
       log(`❌ Failed to start compactor: ${err.message}`, 'error');
@@ -713,17 +556,10 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ============================================
   const clearSessionTimers = useCallback(() => {
     const s = stateRef.current;
-    if (s.sessionTimeoutTimer) {
-      clearTimeout(s.sessionTimeoutTimer);
-      s.sessionTimeoutTimer = null;
-    }
-    if (s.maxDurationTimer) {
-      clearTimeout(s.maxDurationTimer);
-      s.maxDurationTimer = null;
-    }
+    if (s.sessionTimeoutTimer) { clearTimeout(s.sessionTimeoutTimer); s.sessionTimeoutTimer = null; }
+    if (s.maxDurationTimer) { clearTimeout(s.maxDurationTimer); s.maxDurationTimer = null; }
   }, []);
 
-  // Forward-declared refs for mutual recursion
   const scheduleNextPhotoRef = useRef<() => Promise<void>>();
   const executeAutoCycleRef = useRef<() => Promise<void>>();
   const executeRejectionCycleRef = useRef<() => Promise<void>>();
@@ -731,57 +567,30 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   const handleSessionTimeout = useCallback(async (reason: string) => {
     const s = stateRef.current;
-    log(`⏱️ Session timeout: ${reason}`, 'warn');
-
-    log('🚪 Closing gate immediately (timeout)', 'warn');
-    try {
-      await executeCommand('closeGate');
-      await delay(400);
-    } catch (err: any) {
-      log(`❌ Gate close error: ${err.message}`, 'error');
-    }
-    try {
-      await executeCommand('closeGate');
-      await delay(300);
-    } catch (_) { /* ignore */ }
-
+    try { await executeCommand('closeGate'); await delay(400); } catch (_) {}
+    try { await executeCommand('closeGate'); await delay(300); } catch (_) {}
     s.autoCycleEnabled = false;
     s.awaitingDetection = false;
-
-    if (s.autoPhotoTimer) {
-      clearTimeout(s.autoPhotoTimer);
-      s.autoPhotoTimer = null;
-    }
-
+    if (s.autoPhotoTimer) { clearTimeout(s.autoPhotoTimer); s.autoPhotoTimer = null; }
     if (s.cycleInProgress) {
-      const maxWait = 60000;
-      const startWait = Date.now();
-      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
-        await delay(1000);
-      }
+      const maxWait = 60000; const startWait = Date.now();
+      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) await delay(1000);
     }
-
     s.resetting = false;
     await resetSystemRef.current?.(false);
-  }, [executeCommand, log]);
+  }, [executeCommand]);
 
   const resetInactivityTimer = useCallback(() => {
     const s = stateRef.current;
     if (s.sessionTimeoutTimer) clearTimeout(s.sessionTimeoutTimer);
-
-    s.sessionTimeoutTimer = setTimeout(() => {
-      handleSessionTimeout('inactivity');
-    }, config.timing.sessionTimeout);
+    s.sessionTimeoutTimer = setTimeout(() => { handleSessionTimeout('inactivity'); }, config.timing.sessionTimeout);
   }, [config.timing.sessionTimeout, handleSessionTimeout]);
 
   const startSessionTimers = useCallback(() => {
     const s = stateRef.current;
     resetInactivityTimer();
-
     if (s.maxDurationTimer) clearTimeout(s.maxDurationTimer);
-    s.maxDurationTimer = setTimeout(() => {
-      handleSessionTimeout('max_duration');
-    }, config.timing.sessionMaxDuration);
+    s.maxDurationTimer = setTimeout(() => { handleSessionTimeout('max_duration'); }, config.timing.sessionMaxDuration);
   }, [config.timing.sessionMaxDuration, resetInactivityTimer, handleSessionTimeout]);
 
   // ============================================
@@ -789,63 +598,42 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // ============================================
   const executeRejectionCycle = useCallback(async () => {
     const s = stateRef.current;
-    log('❌ Rejecting item - reversing belt', 'warn');
     setStatus('rejecting');
     setStatusMessage('Item rejected - unrecognized material');
     setIsProcessing(true);
-
     try {
       await executeCommand('customMotor', config.motors.belt.reverse);
       await delay(config.timing.beltReverse);
       await executeCommand('customMotor', config.motors.belt.stop);
-
       trackDetectionAttempt(false, s.detectionRetries);
     } catch (err: any) {
       log(`Rejection error: ${err.message}`, 'error');
     }
-
-    s.aiResult = null;
-    s.weight = null;
-    s.detectionRetries = 0;
-    s.awaitingDetection = false;
-    s.cycleInProgress = false;
-    s.itemAlreadyPositioned = false;
+    s.aiResult = null; s.weight = null; s.detectionRetries = 0;
+    s.awaitingDetection = false; s.cycleInProgress = false; s.itemAlreadyPositioned = false;
     setIsProcessing(false);
-
     if (s.autoCycleEnabled) {
-      setStatus('ready');
-      setStatusMessage('Ready for next item');
+      setStatus('ready'); setStatusMessage('Ready for next item');
       await scheduleNextPhotoRef.current?.();
     }
   }, [config, executeCommand, trackDetectionAttempt, log]);
 
   // ============================================
-  // AUTO CYCLE (⚡ SPEED OPTIMIZED)
+  // AUTO CYCLE
   // ============================================
   const executeAutoCycle = useCallback(async () => {
     const s = stateRef.current;
-
-    if (!s.aiResult || !s.weight || s.weight.weight <= 1) {
-      s.cycleInProgress = false;
-      setIsProcessing(false);
-      return;
-    }
+    if (!s.aiResult || !s.weight || s.weight.weight <= 1) { s.cycleInProgress = false; setIsProcessing(false); return; }
 
     const cycleStartTime = Date.now();
-
     itemsProcessedRef.current += 1;
     totalWeightRef.current += s.weight.weight;
     const newItemsProcessed = itemsProcessedRef.current;
-    const newTotalWeight = totalWeightRef.current;
 
     setItemsProcessed(newItemsProcessed);
-    setTotalWeight(newTotalWeight);
-
+    setTotalWeight(totalWeightRef.current);
     trackDetectionAttempt(true, s.detectionRetries);
-
-    if (s.itemAlreadyPositioned && s.detectionRetries > 0) {
-      s.detectionStats.positioningHelped++;
-    }
+    if (s.itemAlreadyPositioned && s.detectionRetries > 0) s.detectionStats.positioningHelped++;
 
     const itemData: ItemData = {
       itemNumber: newItemsProcessed,
@@ -858,94 +646,61 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     const japaneseName = getJapaneseMaterialName(itemData.material);
     setItemCounts(prev => {
       const idx = prev.findIndex(m => m.materialName === japaneseName);
-      if (idx !== -1) {
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], count: updated[idx].count + 1 };
-        return updated;
-      }
+      if (idx !== -1) { const updated = [...prev]; updated[idx] = { ...updated[idx], count: updated[idx].count + 1 }; return updated; }
       return prev;
     });
 
-    log(`⚡ Item #${newItemsProcessed}: ${itemData.material} (${itemData.weight}g)`, 'success');
     setStatus('processing');
     setStatusMessage(`Processing ${itemData.material}...`);
     setIsProcessing(true);
-
-    // Record to backend IMMEDIATELY (DB writes while motors run)
     recordItemToBackend(itemData);
 
     try {
-      // ⚡ Fire-and-forget compactor start
-      startContinuousCompactor().catch(err => log(`Compactor bg error: ${err.message}`, 'error'));
+      startContinuousCompactor().catch(() => {});
 
-      // Belt to stepper
       await executeCommand('customMotor', config.motors.belt.toStepper);
       await delay(config.timing.beltToStepper);
       await executeCommand('customMotor', config.motors.belt.stop);
 
-      // Rotate stepper to target bin
       const targetPosition = itemData.material === 'METAL_CAN'
         ? config.motors.stepper.positions.metalCan
         : config.motors.stepper.positions.plasticBottle;
       await executeCommand('stepperMotor', { position: targetPosition });
       await delay(config.timing.stepperRotate);
-
-      // Item drop delay
       await delay(config.timing.itemDropDelay);
-
       resetCompactorIdleTimer();
 
-      // ⚡ Fire stepper home but DON'T wait - overlap with next detection
-      executeCommand('stepperMotor', { position: config.motors.stepper.positions.home })
-        .catch(err => log(`Stepper home error: ${err.message}`, 'error'));
-
-      // ⚡ Small buffer to let stepper command register
+      executeCommand('stepperMotor', { position: config.motors.stepper.positions.home }).catch(() => {});
       await delay(200);
 
       trackCycleTime(cycleStartTime);
       resetInactivityTimer();
-
-      log(`✅ CYCLE COMPLETE #${newItemsProcessed}`, 'success');
     } catch (err: any) {
       log(`❌ Cycle error: ${err.message}`, 'error');
       setError(err.message);
     }
 
-    s.aiResult = null;
-    s.weight = null;
-    s.cycleInProgress = false;
-    s.detectionRetries = 0;
-    s.awaitingDetection = false;
-    s.itemAlreadyPositioned = false;
+    s.aiResult = null; s.weight = null; s.cycleInProgress = false;
+    s.detectionRetries = 0; s.awaitingDetection = false; s.itemAlreadyPositioned = false;
     setIsProcessing(false);
 
     if (s.autoCycleEnabled) {
-      setStatus('ready');
-      setStatusMessage('Ready for next item');
+      setStatus('ready'); setStatusMessage('Ready for next item');
       await scheduleNextPhotoRef.current?.();
     }
   }, [config, executeCommand, startContinuousCompactor, resetCompactorIdleTimer,
       recordItemToBackend, trackCycleTime, trackDetectionAttempt, resetInactivityTimer, log]);
 
   // ============================================
-  // ✅ FIX: PHOTO DETECTION WITH POSITIONING
-  // Key changes:
-  // 1) Clear s.weight before getWeight call
-  // 2) Use waitForWeight() polling instead of fixed delay
-  // 3) HTTP response fallback handled in executeCommand
-  // 4) Matches Node.js agent flow exactly
+  // PHOTO DETECTION WITH POSITIONING
   // ============================================
   const scheduleNextPhotoWithPositioning = useCallback(async () => {
     const s = stateRef.current;
-
-    if (s.autoPhotoTimer) {
-      clearTimeout(s.autoPhotoTimer);
-    }
+    if (s.autoPhotoTimer) clearTimeout(s.autoPhotoTimer);
 
     s.autoPhotoTimer = setTimeout(async () => {
       if (!s.autoCycleEnabled || s.cycleInProgress || s.awaitingDetection) return;
 
-      // ⚡ Single belt stop before weight check
       try {
         await executeCommand('customMotor', config.motors.belt.stop);
         await delay(config.timing.positionSettle);
@@ -953,42 +708,20 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         log(`Belt pre-stop error: ${err.message}`, 'error');
       }
 
-      log('🔍 Checking weight for item presence...', 'info');
-
       try {
-        const wsState = wsRef.current?.readyState;
-        const wsStates = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
-        log(`📡 WS state: ${wsStates[wsState ?? 3] || 'NULL'} | moduleId: ${moduleIdRef.current}`, 'debug');
-
-        // ✅ FIX: Clear weight BEFORE calling getWeight so we get a fresh reading
         s.weight = null;
-
-        // ✅ FIX: executeCommand('getWeight') now also sets s.weight from HTTP response as fallback
         await executeCommand('getWeight');
-
-        // ✅ FIX: Poll for weight with timeout instead of fixed delay
-        // This handles both WS response AND HTTP fallback
         const weightResult = await waitForWeight(2000);
 
         if (!weightResult || weightResult.weight < config.detection.minValidWeight) {
-          log(`⚖️ No item detected (weight: ${weightResult ? weightResult.weight + 'g' : 'null'}) - waiting...`, 'debug');
           s.weight = null;
-
-          if (s.autoCycleEnabled) {
-            await scheduleNextPhotoRef.current?.();
-          }
+          if (s.autoCycleEnabled) await scheduleNextPhotoRef.current?.();
           return;
         }
 
-        log(`✅ Item detected (${weightResult.weight}g) - proceeding to position`, 'success');
-        // ✅ FIX: Clear weight after successful check (same as Node.js agent)
         s.weight = null;
-
       } catch (err: any) {
-        log(`Weight check error: ${err.message}`, 'error');
-        if (s.autoCycleEnabled) {
-          await scheduleNextPhotoRef.current?.();
-        }
+        if (s.autoCycleEnabled) await scheduleNextPhotoRef.current?.();
         return;
       }
 
@@ -997,107 +730,52 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       try {
         if (config.detection.positionBeforePhoto) {
-          log('🔄 Moving belt to camera position...', 'info');
           await executeCommand('customMotor', config.motors.belt.toWeight);
           await delay(config.timing.beltToWeight);
-
           await executeCommand('customMotor', config.motors.belt.stop);
           await delay(config.timing.positionSettle);
-
           s.itemAlreadyPositioned = true;
-          log('✅ Item positioned at camera', 'camera');
         }
 
-        log('📸 Taking photo...', 'camera');
         await executeCommand('takePhoto');
-        log('📸 Photo command sent - waiting for AI result...', 'camera');
-
       } catch (err: any) {
-        log(`❌ Photo positioning error: ${err.message}`, 'error');
         s.awaitingDetection = false;
         s.itemAlreadyPositioned = false;
         s.weight = null;
-
-        try {
-          await executeCommand('customMotor', config.motors.belt.stop);
-        } catch (_) { /* ignore */ }
-
-        if (s.autoCycleEnabled) {
-          await scheduleNextPhotoRef.current?.();
-        }
+        try { await executeCommand('customMotor', config.motors.belt.stop); } catch (_) {}
+        if (s.autoCycleEnabled) await scheduleNextPhotoRef.current?.();
       }
     }, 500);
   }, [config, executeCommand, waitForWeight, log]);
 
-  // Keep refs updated for mutual recursion
-  useEffect(() => { scheduleNextPhotoRef.current = scheduleNextPhotoWithPositioning; },
-    [scheduleNextPhotoWithPositioning]);
-  useEffect(() => { executeAutoCycleRef.current = executeAutoCycle; },
-    [executeAutoCycle]);
-  useEffect(() => { executeRejectionCycleRef.current = executeRejectionCycle; },
-    [executeRejectionCycle]);
+  useEffect(() => { scheduleNextPhotoRef.current = scheduleNextPhotoWithPositioning; }, [scheduleNextPhotoWithPositioning]);
+  useEffect(() => { executeAutoCycleRef.current = executeAutoCycle; }, [executeAutoCycle]);
+  useEffect(() => { executeRejectionCycleRef.current = executeRejectionCycle; }, [executeRejectionCycle]);
 
   // ============================================
   // RESET SYSTEM
   // ============================================
   const resetSystemForNextUser = useCallback(async (forceStop: boolean = false): Promise<SessionSummary | null> => {
     const s = stateRef.current;
-
-    log('🔄 RESET SYSTEM', 'info');
-
-    if (s.resetting) {
-      log('⚠️ Reset already in progress, skipping', 'warn');
-      return null;
-    }
-
+    if (s.resetting) return null;
     s.resetting = true;
 
-    log('🚪 Closing gate immediately (session ended)...', 'info');
-    try {
-      await executeCommand('closeGate');
-      await delay(400);
-      log('✅ Gate close confirmed (attempt 1)', 'success');
-    } catch (err: any) {
-      log(`❌ Gate closure error: ${err.message}`, 'error');
-    }
-    try {
-      await executeCommand('closeGate');
-      await delay(300);
-      log('✅ Gate close confirmed (attempt 2)', 'success');
-    } catch (_) { /* ignore */ }
+    try { await executeCommand('closeGate'); await delay(400); } catch (_) {}
+    try { await executeCommand('closeGate'); await delay(300); } catch (_) {}
 
     s.autoCycleEnabled = false;
     s.awaitingDetection = false;
-
-    if (s.autoPhotoTimer) {
-      clearTimeout(s.autoPhotoTimer);
-      s.autoPhotoTimer = null;
-    }
+    if (s.autoPhotoTimer) { clearTimeout(s.autoPhotoTimer); s.autoPhotoTimer = null; }
 
     if (s.cycleInProgress) {
-      log('⏳ Cycle in progress - waiting...', 'info');
-      const maxWait = 60000;
-      const startWait = Date.now();
-      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
-        await delay(2000);
-      }
-      if (s.cycleInProgress) {
-        log('⚠️ Cycle timeout - forcing completion', 'warn');
-        s.cycleInProgress = false;
-      }
+      const maxWait = 60000; const startWait = Date.now();
+      while (s.cycleInProgress && (Date.now() - startWait) < maxWait) await delay(2000);
+      if (s.cycleInProgress) s.cycleInProgress = false;
     }
 
     try {
-      if (forceStop) {
-        await stopCompactor();
-      } else {
-        if (s.compactorRunning) {
-          log('⏳ Waiting for compactor to finish...', 'info');
-          await delay(2000);
-          await stopCompactor();
-        }
-      }
-
+      if (forceStop) { await stopCompactor(); }
+      else if (s.compactorRunning) { await delay(2000); await stopCompactor(); }
       await executeCommand('customMotor', config.motors.belt.stop);
     } catch (err: any) {
       log(`❌ Reset error: ${err.message}`, 'error');
@@ -1105,20 +783,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     if (s.sessionCode) {
       try {
-        log(`📤 Notifying backend: Session ended (${s.sessionCode})`, 'info');
         await fetch(`${config.backend.url}/api/rvm/local/session/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionCode: s.sessionCode,
-            deviceId: config.device.id,
-          }),
+          body: JSON.stringify({ sessionCode: s.sessionCode, deviceId: config.device.id }),
           signal: AbortSignal.timeout(config.backend.timeout),
         });
-        log('✅ Session end notification sent', 'success');
-      } catch (err: any) {
-        log(`⚠️ Session end notification error: ${err.message}`, 'warn');
-      }
+      } catch (_) {}
     }
 
     const sessionSummary: SessionSummary = {
@@ -1129,116 +800,64 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       duration: s.sessionStartTime ? Date.now() - s.sessionStartTime.getTime() : 0,
     };
 
-    s.aiResult = null;
-    s.weight = null;
-    s.currentUserId = null;
-    s.sessionCode = null;
-    s.sessionStartTime = null;
-    s.isMemberSession = false;
-    s.calibrationAttempts = 0;
-    s.detectionRetries = 0;
-    s.itemAlreadyPositioned = false;
-    s.lastItemTime = null;
-
+    s.aiResult = null; s.weight = null; s.currentUserId = null; s.sessionCode = null;
+    s.sessionStartTime = null; s.isMemberSession = false; s.calibrationAttempts = 0;
+    s.detectionRetries = 0; s.itemAlreadyPositioned = false; s.lastItemTime = null;
     clearSessionTimers();
 
-    setSessionCode(null);
-    setCurrentUser(null);
-    setSessionActive(false);
-    setItemsProcessed(0);
-    setTotalWeight(0);
-    setTotalPoints(0);
+    setSessionCode(null); setCurrentUser(null); setSessionActive(false);
+    setItemsProcessed(0); setTotalWeight(0); setTotalPoints(0);
     setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
-    setStatus('ready');
-    setStatusMessage('System ready');
-
-    itemsProcessedRef.current = 0;
-    totalWeightRef.current = 0;
-
-    s.resetting = false;
-    s.sessionCount++;
-
-    log('✅ READY FOR NEXT USER', 'success');
+    setStatus('ready'); setStatusMessage('System ready');
+    itemsProcessedRef.current = 0; totalWeightRef.current = 0;
+    s.resetting = false; s.sessionCount++;
 
     return sessionSummary;
   }, [config, executeCommand, stopCompactor, clearSessionTimers, log]);
 
-  useEffect(() => { resetSystemRef.current = resetSystemForNextUser; },
-    [resetSystemForNextUser]);
+  useEffect(() => { resetSystemRef.current = resetSystemForNextUser; }, [resetSystemForNextUser]);
 
   // ============================================
   // SESSION START (member)
   // ============================================
   const startSession = useCallback(async (userData: UserData) => {
     const s = stateRef.current;
+    s.currentUserId = userData.userId; s.sessionCode = userData.sessionCode;
+    s.isMemberSession = true; s.autoCycleEnabled = true; s.sessionStartTime = new Date();
+    s.detectionRetries = 0; s.awaitingDetection = false; s.itemAlreadyPositioned = false;
+    itemsProcessedRef.current = 0; totalWeightRef.current = 0;
 
-    log(`🎬 SESSION START: ${userData.name || userData.userId}`, 'info');
-
-    s.currentUserId = userData.userId;
-    s.sessionCode = userData.sessionCode;
-    s.isMemberSession = true;
-    s.autoCycleEnabled = true;
-    s.sessionStartTime = new Date();
-    s.detectionRetries = 0;
-    s.awaitingDetection = false;
-    s.itemAlreadyPositioned = false;
-
-    itemsProcessedRef.current = 0;
-    totalWeightRef.current = 0;
-
-    setSessionCode(userData.sessionCode);
-    setCurrentUser(userData);
-    setSessionActive(true);
-    setItemsProcessed(0);
-    setTotalWeight(0);
-    setTotalPoints(0);
+    setSessionCode(userData.sessionCode); setCurrentUser(userData); setSessionActive(true);
+    setItemsProcessed(0); setTotalWeight(0); setTotalPoints(0);
     setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
-    setStatus('active');
-    setStatusMessage('Session active - Place your bottle');
-
+    setStatus('active'); setStatusMessage('Session active - Place your bottle');
     startSessionTimers();
 
     await executeCommand('customMotor', config.motors.belt.stop);
     await stopCompactor();
-
     await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
     await delay(config.timing.resetHomeDelay);
-
     await executeCommand('calibrateWeight');
     await delay(config.timing.calibrationDelay);
-
     await executeCommand('openGate');
     await delay(config.timing.commandDelay);
 
-    log('✅ Session active', 'success');
-    setStatus('ready');
-    setStatusMessage('Ready for item - Place your bottle');
-
+    setStatus('ready'); setStatusMessage('Ready for item - Place your bottle');
     await delay(4000);
     await scheduleNextPhotoWithPositioning();
-  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning, log]);
+  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning]);
 
   // ============================================
   // GUEST SESSION START
   // ============================================
   const startGuestSession = useCallback(async () => {
     try {
-      setError(null);
-      setStatus('active');
-      setStatusMessage('Starting guest session...');
-      setIsProcessing(true);
-
-      log('🎬 Starting GUEST session...', 'info');
+      setError(null); setStatus('active'); setStatusMessage('Starting guest session...'); setIsProcessing(true);
 
       const url = `${config.backend.url}/api/rvm/${config.device.id}/guest/start`;
-      log(`📡 Calling: ${url}`, 'info');
-
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         signal: AbortSignal.timeout(config.backend.timeout),
       });
 
@@ -1252,193 +871,107 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       if (data.success) {
         const s = stateRef.current;
+        s.sessionCode = data.session.sessionCode; s.currentUserId = null;
+        s.isMemberSession = false; s.autoCycleEnabled = true; s.sessionStartTime = new Date();
+        s.detectionRetries = 0; s.awaitingDetection = false; s.itemAlreadyPositioned = false;
+        itemsProcessedRef.current = 0; totalWeightRef.current = 0;
 
-        s.sessionCode = data.session.sessionCode;
-        s.currentUserId = null;
-        s.isMemberSession = false;
-        s.autoCycleEnabled = true;
-        s.sessionStartTime = new Date();
-        s.detectionRetries = 0;
-        s.awaitingDetection = false;
-        s.itemAlreadyPositioned = false;
-
-        itemsProcessedRef.current = 0;
-        totalWeightRef.current = 0;
-
-        setSessionCode(data.session.sessionCode);
-        setSessionActive(true);
-        setItemsProcessed(0);
-        setTotalWeight(0);
-        setTotalPoints(0);
+        setSessionCode(data.session.sessionCode); setSessionActive(true);
+        setItemsProcessed(0); setTotalWeight(0); setTotalPoints(0);
         setItemCounts(prev => prev.map(m => ({ materialName: m.materialName, count: 0 })));
-
-        log(`✅ Guest session created: ${data.session.sessionCode}`, 'success');
-
         startSessionTimers();
 
         await executeCommand('customMotor', config.motors.belt.stop);
         await stopCompactor();
-
         await executeCommand('stepperMotor', { position: config.motors.stepper.positions.home });
         await delay(config.timing.resetHomeDelay);
-
         await executeCommand('calibrateWeight');
         await delay(config.timing.calibrationDelay);
-
         await executeCommand('openGate');
         await delay(config.timing.commandDelay);
 
-        setStatus('ready');
-        setStatusMessage('Ready - Place your recyclables');
-        setIsProcessing(false);
-
-        log('⏳ Waiting 4 seconds for first item...', 'info');
+        setStatus('ready'); setStatusMessage('Ready - Place your recyclables'); setIsProcessing(false);
         await delay(4000);
         await scheduleNextPhotoWithPositioning();
 
-        log('✅ Guest session ready', 'success');
-
-        return {
-          success: true,
-          sessionCode: data.session.sessionCode,
-          sessionId: data.session.sessionId,
-        };
+        return { success: true, sessionCode: data.session.sessionCode, sessionId: data.session.sessionId };
       } else {
-        setError(data.error || 'Failed to start session');
-        setIsProcessing(false);
-        log(`❌ Guest session failed: ${data.error}`, 'error');
+        setError(data.error || 'Failed to start session'); setIsProcessing(false);
         return { success: false, error: data.error };
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Network error';
-      setError(errorMsg);
-      setIsProcessing(false);
-      log(`❌ Guest session error: ${errorMsg}`, 'error');
+      setError(errorMsg); setIsProcessing(false);
       return { success: false, error: errorMsg };
     }
-  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning, log]);
+  }, [config, executeCommand, stopCompactor, startSessionTimers, scheduleNextPhotoWithPositioning]);
 
   // ============================================
   // END SESSION
   // ============================================
   const endSession = useCallback(async () => {
     const s = stateRef.current;
-
-    if (!s.sessionCode) {
-      log('⚠️ No active session to end', 'warn');
-      return { success: false, error: 'No active session' };
-    }
+    if (!s.sessionCode) return { success: false, error: 'No active session' };
 
     try {
-      setIsProcessing(true);
-      setStatus('processing');
-      setStatusMessage('Ending session - Gate closing...');
+      setIsProcessing(true); setStatus('processing'); setStatusMessage('Ending session - Gate closing...');
+      s.autoCycleEnabled = false; s.awaitingDetection = false;
+      if (s.autoPhotoTimer) { clearTimeout(s.autoPhotoTimer); s.autoPhotoTimer = null; }
 
-      log('🏁 Ending session...', 'info');
-
-      s.autoCycleEnabled = false;
-      s.awaitingDetection = false;
-      if (s.autoPhotoTimer) {
-        clearTimeout(s.autoPhotoTimer);
-        s.autoPhotoTimer = null;
-      }
-
-      try {
-        await executeCommand('closeGate');
-        await delay(400);
-      } catch (_) { /* ignore */ }
-      try {
-        await executeCommand('closeGate');
-        await delay(400);
-      } catch (_) { /* ignore */ }
+      try { await executeCommand('closeGate'); await delay(400); } catch (_) {}
+      try { await executeCommand('closeGate'); await delay(400); } catch (_) {}
 
       if (s.cycleInProgress) {
-        log('⏳ Waiting for cycle to complete...', 'info');
-        const maxWait = 60000;
-        const startWait = Date.now();
-        while (s.cycleInProgress && (Date.now() - startWait) < maxWait) {
-          await delay(1000);
-        }
+        const maxWait = 60000; const startWait = Date.now();
+        while (s.cycleInProgress && (Date.now() - startWait) < maxWait) await delay(1000);
       }
 
-      const response = await fetch(
-        `${config.backend.url}/api/rvm/local/session/end`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionCode: s.sessionCode,
-            deviceId: config.device.id,
-          }),
-          signal: AbortSignal.timeout(config.backend.timeout),
-        }
-      );
+      const response = await fetch(`${config.backend.url}/api/rvm/local/session/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionCode: s.sessionCode, deviceId: config.device.id }),
+        signal: AbortSignal.timeout(config.backend.timeout),
+      });
 
       const data = await response.json();
-
       if (data.success) {
-        log(`✅ Session ended: ${data.summary?.totalPoints || 0} points`, 'success');
-
         s.resetting = false;
         await resetSystemForNextUser(false);
-
         setIsProcessing(false);
-
-        return {
-          success: true,
-          qrCode: data.qrCode,
-          summary: data.summary,
-          message: data.message,
-        };
+        return { success: true, qrCode: data.qrCode, summary: data.summary, message: data.message };
       } else {
-        setError(data.error || 'Failed to end session');
-        setIsProcessing(false);
+        setError(data.error || 'Failed to end session'); setIsProcessing(false);
         return { success: false, error: data.error };
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Network error';
-      setError(errorMsg);
-      setIsProcessing(false);
+      setError(errorMsg); setIsProcessing(false);
       return { success: false, error: errorMsg };
     }
-  }, [config, executeCommand, resetSystemForNextUser, log]);
+  }, [config, executeCommand, resetSystemForNextUser]);
 
   // ============================================
   // EMERGENCY STOP
   // ============================================
   const emergencyStop = useCallback(async () => {
     const s = stateRef.current;
-    log('🚨 EMERGENCY STOP', 'error');
-
-    s.autoCycleEnabled = false;
-    s.cycleInProgress = false;
-
+    s.autoCycleEnabled = false; s.cycleInProgress = false;
     await executeCommand('closeGate');
     await executeCommand('customMotor', config.motors.belt.stop);
     await stopCompactor();
-
     s.resetting = false;
-
-    setStatus('error');
-    setStatusMessage('Emergency stop activated');
-  }, [config, executeCommand, stopCompactor, log]);
+    setStatus('error'); setStatusMessage('Emergency stop activated');
+  }, [config, executeCommand, stopCompactor]);
 
   // ============================================
   // BIN STATUS MANAGEMENT
   // ============================================
   const resetBinStatus = useCallback((binKey?: keyof BinStatus) => {
     const s = stateRef.current;
-    if (binKey) {
-      s.binStatus[binKey] = false;
-    } else {
-      s.binStatus.plastic = false;
-      s.binStatus.metal = false;
-      s.binStatus.right = false;
-      s.binStatus.glass = false;
-    }
+    if (binKey) { s.binStatus[binKey] = false; }
+    else { s.binStatus.plastic = false; s.binStatus.metal = false; s.binStatus.right = false; s.binStatus.glass = false; }
     setBinStatus({ ...s.binStatus });
-    log(`🗑️ Bin status reset${binKey ? `: ${binKey}` : ' (all)'}`, 'success');
-  }, [log]);
+  }, []);
 
   // ============================================
   // DIAGNOSTICS
@@ -1448,36 +981,20 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     const stats = s.detectionStats;
     const total = stats.firstTimeSuccess + stats.secondTimeSuccess + stats.thirdTimeSuccess + stats.failures;
     const firstTimeRate = total > 0 ? ((stats.firstTimeSuccess / total) * 100).toFixed(1) : '0';
-
     console.log('\n' + '='.repeat(60));
     console.log('🔬 SYSTEM DIAGNOSTICS');
     console.log('='.repeat(60));
-    console.log(`  Device ID:       ${config.device.id}`);
-    console.log(`  Module ID:       ${moduleIdRef.current} (HARDCODED)`);
-    console.log(`  Auto Cycle:      ${s.autoCycleEnabled}`);
-    console.log(`  Cycle In Prog:   ${s.cycleInProgress}`);
-    console.log(`  Resetting:       ${s.resetting}`);
-    console.log(`  Compactor:       ${s.compactorRunning ? 'ON' : 'OFF'}`);
-    console.log(`  Session Code:    ${s.sessionCode || 'none'}`);
-    console.log(`  Items Processed: ${itemsProcessedRef.current}`);
-    console.log('  Bin Status:');
-    console.log(`    Plastic: ${s.binStatus.plastic ? '❌ FULL' : '✅ OK'}`);
-    console.log(`    Metal:   ${s.binStatus.metal ? '❌ FULL' : '✅ OK'}`);
-    console.log(`    Right:   ${s.binStatus.right ? '❌ FULL' : '✅ OK'}`);
-    console.log(`    Glass:   ${s.binStatus.glass ? '❌ FULL' : '✅ OK'}`);
-    console.log('  Detection Stats:');
-    console.log(`    Total: ${stats.totalAttempts} | 1st-time: ${firstTimeRate}%`);
-    console.log(`    Avg retries: ${stats.averageRetries.toFixed(2)}`);
-    if (s.averageCycleTime) {
-      console.log(`  Avg Cycle Time: ${Math.round(s.averageCycleTime)}ms`);
-    }
-    console.log('  ⚡ SPEED OPTIMIZED');
+    console.log(`  Device ID: ${config.device.id} | Module ID: ${moduleIdRef.current}`);
+    console.log(`  Auto Cycle: ${s.autoCycleEnabled} | Cycle In Prog: ${s.cycleInProgress}`);
+    console.log(`  Compactor: ${s.compactorRunning ? 'ON' : 'OFF'} | Session: ${s.sessionCode || 'none'}`);
+    console.log(`  Items: ${itemsProcessedRef.current} | Detection: ${stats.totalAttempts} total, ${firstTimeRate}% first-time`);
+    console.log(`  Bins: P:${s.binStatus.plastic ? 'FULL' : 'OK'} M:${s.binStatus.metal ? 'FULL' : 'OK'} R:${s.binStatus.right ? 'FULL' : 'OK'} G:${s.binStatus.glass ? 'FULL' : 'OK'}`);
+    if (s.averageCycleTime) console.log(`  Avg Cycle: ${Math.round(s.averageCycleTime)}ms`);
     console.log('='.repeat(60) + '\n');
   }, [config.device.id]);
 
   // ============================================
   // INITIALIZATION
-  // ✅ FIX: Enhanced WS message handling with better logging
   // ============================================
   const determineMaterialTypeRef = useRef(determineMaterialType);
   const executeCommandRef = useRef(executeCommand);
@@ -1489,101 +1006,52 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   useEffect(() => { handleSessionTimeoutRef.current = handleSessionTimeout; }, [handleSessionTimeout]);
   useEffect(() => { parseWeightRef.current = parseWeight; }, [parseWeight]);
 
-  // Single stable init — runs ONCE
   useEffect(() => {
-    log('========================================', 'info');
-    log(`🚀 RVM CONTROL - Device: ${config.device.id}`, 'info');
-    log('⚡ SPEED OPTIMIZED | Module ID: 09 (hardcoded)', 'info');
-    log('========================================', 'info');
-
     let destroyed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     function connectWS() {
-      if (destroyed) {
-        console.log('[WS] ⚠️ connectWS called but destroyed=true, skipping');
-        return;
-      }
-
+      if (destroyed) return;
       if (wsRef.current) {
-        try {
-          console.log('[WS] Closing existing connection before reconnect...');
-          wsRef.current.onclose = null;
-          wsRef.current.onmessage = null;
-          wsRef.current.onerror = null;
-          wsRef.current.onopen = null;
-          wsRef.current.close();
-        } catch (_) { /* ignore */ }
+        try { wsRef.current.onclose = null; wsRef.current.onmessage = null; wsRef.current.close(); } catch (_) {}
         wsRef.current = null;
       }
 
-      console.log(`[WS] Connecting to ${config.local.wsUrl}...`);
-
       const ws = new WebSocket(config.local.wsUrl);
       wsRef.current = ws;
-
-      // ✅ FIX: Ensure text mode for WS messages (not binary)
-      ws.binaryType = 'arraybuffer';  // or 'blob' — try arraybuffer first for consistent handling
-
-      // ✅ DEBUG: Track message count
-      let wsMessageCount = 0;
+      ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        if (destroyed) {
-          console.log('[WS] ⚠️ onopen fired but destroyed=true, closing');
-          ws.close();
-          return;
-        }
-        console.log('[WS] ✅ WebSocket connected');
-        console.log(`[WS] readyState: ${ws.readyState}, binaryType: ${ws.binaryType}, protocol: "${ws.protocol}", url: ${ws.url}`);
-        console.log(`[WS] extensions: "${ws.extensions}", bufferedAmount: ${ws.bufferedAmount}`);
-        setIsReady(true);
-        setStatus('ready');
-        setStatusMessage('System ready');
+        if (destroyed) { ws.close(); return; }
+        setIsReady(true); setStatus('ready'); setStatusMessage('System ready');
       };
 
-      // ✅ FIX: Use both onmessage AND addEventListener for maximum compatibility
-      // Some WS implementations/browsers work better with one or the other
-      const handleMessage = async (event: MessageEvent) => {
+      ws.onmessage = async (event) => {
         if (destroyed) return;
-
-        wsMessageCount++;
-        // ✅ FIRST: Log that we received ANYTHING — before any parsing
-        console.log(`[WS] 📨 MSG #${wsMessageCount} - type: ${typeof event.data}, constructor: ${event.data?.constructor?.name}, size: ${event.data?.byteLength || event.data?.size || event.data?.length || '?'}`);
-
         try {
           let rawData: string;
           if (typeof event.data === 'string') {
             rawData = event.data;
           } else if (event.data instanceof ArrayBuffer) {
-            console.log(`[WS] 📦 ArrayBuffer, byteLength: ${event.data.byteLength}`);
             rawData = new TextDecoder().decode(event.data);
           } else if (event.data instanceof Blob) {
-            console.log(`[WS] 📦 Blob, size: ${event.data.size}`);
             rawData = await event.data.text();
           } else {
-            console.log(`[WS] 📦 Unknown type: ${typeof event.data}`);
             rawData = String(event.data);
           }
-          
-          console.log(`[WS] 📩 RAW: ${rawData.substring(0, 300)}`);
-          
+
           const message = JSON.parse(rawData);
           const s = stateRef.current;
 
-          // ── Module ID from hardware ──
+          // Module ID from hardware
           if (message.function === '01') {
-            const wsModuleId = message.moduleId;
-            console.log(`[WS] ✅ Module ID from hardware: ${wsModuleId}`);
-            setModuleId(wsModuleId);
-            moduleIdRef.current = wsModuleId;
-            setIsReady(true);
-            setStatus('ready');
-            setStatusMessage('System ready');
+            setModuleId(message.moduleId);
+            moduleIdRef.current = message.moduleId;
+            setIsReady(true); setStatus('ready'); setStatusMessage('System ready');
             return;
           }
 
-          // ── AI Photo Result ──
+          // AI Photo Result
           if (message.function === 'aiPhoto') {
             const aiData = JSON.parse(message.data);
             const materialType = determineMaterialTypeRef.current(aiData);
@@ -1596,99 +1064,67 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
               timestamp: new Date().toISOString(),
             };
 
-            console.log(`[WS] 🤖 AI: ${materialType} (${s.aiResult.matchRate}%)`);
-
             if (s.autoCycleEnabled && s.awaitingDetection) {
               s.awaitingDetection = false;
-              console.log('[WS] 🔍 AI detection complete - measuring weight...');
               s.weight = null;
 
-              // ✅ FIX: Call getWeight and handle result directly
-              // After getWeight HTTP call, wait for WS '06' to arrive with weight value
               setTimeout(async () => {
                 try {
-                  // Clear weight, trigger measurement
                   s.weight = null;
                   await executeCommandRef.current('getWeight');
 
-                  // ✅ Wait for WS '06' message to set s.weight (polling)
                   let waitElapsed = 0;
-                  const waitInterval = 100;
-                  const waitTimeout = 3000;
-                  while (!s.weight && waitElapsed < waitTimeout) {
-                    await new Promise(resolve => setTimeout(resolve, waitInterval));
-                    waitElapsed += waitInterval;
+                  while (!s.weight && waitElapsed < 3000) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    waitElapsed += 100;
                   }
 
                   if (s.weight && s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
-                    console.log(`[WS] ⚖️ Final weight after AI: ${s.weight.weight}g (waited ${waitElapsed}ms)`);
-
                     if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
                       s.calibrationAttempts++;
-                      console.log(`[WS] ⚖️ Zero weight - recalibrating (attempt ${s.calibrationAttempts})`);
                       await executeCommandRef.current('calibrateWeight');
                       await new Promise(resolve => setTimeout(resolve, config.timing.calibrationDelay));
                       s.weight = null;
                       await executeCommandRef.current('getWeight');
                       let w2 = 0;
-                      while (!s.weight && w2 < waitTimeout) {
-                        await new Promise(resolve => setTimeout(resolve, waitInterval));
-                        w2 += waitInterval;
-                      }
+                      while (!s.weight && w2 < 3000) { await new Promise(resolve => setTimeout(resolve, 100)); w2 += 100; }
                     }
                     if (s.weight && s.weight.weight > 0) s.calibrationAttempts = 0;
 
                     if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
-                      console.log('[WS] ⚠️ Weight too low after photo - skipping');
-                      s.aiResult = null;
-                      s.weight = null;
-                      s.itemAlreadyPositioned = false;
+                      s.aiResult = null; s.weight = null; s.itemAlreadyPositioned = false;
                       await scheduleNextPhotoRef.current?.();
                       return;
                     }
-
                     if (s.aiResult.materialType === 'UNKNOWN') {
-                      console.log('[WS] ❌ Unknown material - rejecting');
                       s.cycleInProgress = true;
                       executeRejectionCycleRef.current?.();
                       return;
                     }
-
-                    console.log('[WS] ✅ Starting auto cycle...');
                     s.cycleInProgress = true;
                     executeAutoCycleRef.current?.();
                   } else {
-                    console.log(`[WS] ⚠️ No weight after getWeight (weight: ${s.weight ? s.weight.weight : 'null'}, aiResult: ${s.aiResult ? 'yes' : 'no'})`);
                     if (s.autoCycleEnabled && !s.cycleInProgress) {
-                      s.aiResult = null;
-                      s.weight = null;
+                      s.aiResult = null; s.weight = null;
                       await scheduleNextPhotoRef.current?.();
                     }
                   }
                 } catch (err: any) {
-                  console.error(`[WS] ❌ getWeight after AI error: ${err.message}`);
-                  if (s.autoCycleEnabled && !s.cycleInProgress) {
-                    await scheduleNextPhotoRef.current?.();
-                  }
+                  if (s.autoCycleEnabled && !s.cycleInProgress) await scheduleNextPhotoRef.current?.();
                 }
               }, 100);
             }
             return;
           }
 
-          // ── Weight Result (function '06') ──
+          // Weight Result (function '06')
           if (message.function === '06') {
             const weightValue = parseFloat(message.data) || 0;
             const parsed = parseWeightRef.current(weightValue);
-
-            // ✅ ALWAYS set weight — both polling (waitForWeight) and WS '06' handler check this
             s.weight = parsed;
-
-            console.log(`[WS] ⚖️ Weight: ${parsed.weight}g (raw: ${weightValue})`);
 
             if (parsed.weight <= 0 && s.calibrationAttempts < 2) {
               s.calibrationAttempts++;
-              console.log(`[WS] ⚖️ Zero weight - recalibrating (attempt ${s.calibrationAttempts})`);
               setTimeout(async () => {
                 await executeCommandRef.current('calibrateWeight');
                 setTimeout(() => executeCommandRef.current('getWeight'), config.timing.calibrationDelay);
@@ -1697,39 +1133,26 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             }
             if (parsed.weight > 0) s.calibrationAttempts = 0;
 
-            // ✅ If AI result is ready AND auto cycle is on, proceed
-            // NOTE: This may also be triggered by the aiPhoto handler above
-            // The cycleInProgress guard prevents double execution
             if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
-              console.log(`[WS] ⚖️ Final weight: ${parsed.weight}g`);
-
               if (parsed.weight < config.detection.minValidWeight) {
-                console.log('[WS] ⚠️ Weight too low - skipping');
-                s.aiResult = null;
-                s.weight = null;
-                s.itemAlreadyPositioned = false;
+                s.aiResult = null; s.weight = null; s.itemAlreadyPositioned = false;
                 await scheduleNextPhotoRef.current?.();
                 return;
               }
-
               if (s.aiResult.materialType === 'UNKNOWN') {
-                console.log('[WS] ❌ Unknown material - rejecting');
                 s.cycleInProgress = true;
                 executeRejectionCycleRef.current?.();
                 return;
               }
-
-              console.log('[WS] ✅ Starting auto cycle...');
               s.cycleInProgress = true;
               executeAutoCycleRef.current?.();
             }
             return;
           }
 
-          // ── Device Status / Bin Status ──
+          // Device Status / Bin Status
           if (message.function === 'deviceStatus') {
             const binCode = parseInt(message.data);
-
             const binStatusMap: Record<number, { name: string; key: keyof BinStatus | null; critical: boolean; isObjectSensor?: boolean }> = {
               0: { name: 'Plastic (PET)', key: 'plastic', critical: true },
               1: { name: 'Metal Can', key: 'metal', critical: true },
@@ -1737,53 +1160,34 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
               3: { name: 'Glass', key: 'glass', critical: false },
               4: { name: 'Infrared Sensor', key: null, critical: false, isObjectSensor: true },
             };
-
             const binInfo = binStatusMap[binCode];
-
             if (binInfo) {
               if (binInfo.isObjectSensor) return;
-
-              console.log(`[WS] ⚠️ ${binInfo.name} bin full`);
-
               if (binInfo.key) {
                 s.binStatus[binInfo.key] = true;
                 setBinStatus({ ...s.binStatus });
-
                 if (binInfo.critical && s.autoCycleEnabled) {
-                  const currentMaterialBin: keyof BinStatus | null =
-                    s.aiResult?.materialType === 'METAL_CAN' ? 'metal' : 'plastic';
-
+                  const currentMaterialBin: keyof BinStatus | null = s.aiResult?.materialType === 'METAL_CAN' ? 'metal' : 'plastic';
                   if (binInfo.key === currentMaterialBin) {
-                    setTimeout(async () => {
-                      await handleSessionTimeoutRef.current('bin_full');
-                    }, 2000);
+                    setTimeout(async () => { await handleSessionTimeoutRef.current('bin_full'); }, 2000);
                   }
                 }
               }
             }
             return;
           }
-
-          // ✅ Log unhandled WS messages
-          console.log(`[WS] 📨 Unhandled: function=${message.function}, data=${JSON.stringify(message.data).substring(0, 100)}`);
-
         } catch (err: any) {
-          console.error(`[WS] ❌ Message parse error: ${err.message}`, err);
+          // parse error — ignore
         }
       };
 
-      // ✅ FIX: Set handler via BOTH property AND addEventListener
-      ws.onmessage = handleMessage;
-
-      ws.onclose = (event) => {
+      ws.onclose = () => {
         if (destroyed) return;
-        console.log(`[WS] ⚠️ Closed (code: ${event.code}, reason: "${event.reason}"), reconnecting in 5s...`);
         reconnectTimer = setTimeout(connectWS, 5000);
       };
 
-      ws.onerror = (event) => {
+      ws.onerror = () => {
         if (destroyed) return;
-        console.error('[WS] ❌ Connection error:', event);
       };
     }
 
@@ -1793,14 +1197,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.onmessage = null;
-        wsRef.current.onerror = null;
-        wsRef.current.onopen = null;
-        wsRef.current.close();
-        wsRef.current = null;
+        wsRef.current.onclose = null; wsRef.current.onmessage = null;
+        wsRef.current.close(); wsRef.current = null;
       }
-
       const s = stateRef.current;
       if (s.sessionTimeoutTimer) clearTimeout(s.sessionTimeoutTimer);
       if (s.maxDurationTimer) clearTimeout(s.maxDurationTimer);
@@ -1811,15 +1210,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Fetch accepted materials using dynamic device ID
   useEffect(() => {
     const fetchAcceptedMaterials = async () => {
       try {
         const response = await fetch(`${keys?.base_url}api/rvm/${config.device.id}/materials`);
         const data = await response?.json();
         const materials = data?.materials?.map((m: { id: string; materialName: string }) => ({
-          materialName: m?.materialName,
-          count: 0,
+          materialName: m?.materialName, count: 0,
         }));
         setItemCounts(materials);
       } catch (err) {
@@ -1833,28 +1230,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   // RETURN API
   // ============================================
   return {
-    // State
-    status,
-    isReady,
-    sessionActive,
-    sessionCode,
-    itemsProcessed,
-    totalWeight,
-    totalPoints,
-    itemCounts,
-    currentUser,
-    statusMessage,
-    error,
-    setError,
-    isProcessing,
-    binStatus,
-
-    // Actions
-    startSession,
-    startGuestSession,
-    endSession,
-    emergencyStop,
-    resetBinStatus,
-    runDiagnostics,
+    status, isReady, sessionActive, sessionCode, itemsProcessed, totalWeight,
+    totalPoints, itemCounts, currentUser, statusMessage, error, setError,
+    isProcessing, binStatus,
+    startSession, startGuestSession, endSession, emergencyStop, resetBinStatus, runDiagnostics,
   };
 };
