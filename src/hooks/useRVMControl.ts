@@ -125,7 +125,6 @@ export type RVMStatus = 'idle' | 'ready' | 'processing' | 'active' | 'rejecting'
 // ============================================
 // DYNAMIC DEVICE ID
 // ============================================
-// Priority: 1) env var  2) keys config  3) fallback
 const DEVICE_ID: string =
   (typeof process !== 'undefined' && process.env?.REACT_APP_DEVICE_ID) ||
   (keys as any)?.device_id ||
@@ -177,18 +176,18 @@ const DEFAULT_CONFIG: RVMConfig = {
   },
   timing: {
     beltToWeight: 1800,
-    beltToStepper: 1800,       // ⚡ was 2200
+    beltToStepper: 1800,
     beltReverse: 3500,
     stepperRotate: 2200,
-    stepperReset: 2200,        // ⚡ was 3000
+    stepperReset: 2200,
     compactorIdleStop: 20000,
-    positionSettle: 100,       // ⚡ was 200
+    positionSettle: 100,
     gateOperation: 600,
     autoPhotoDelay: 2500,
     sessionTimeout: 300000,
     sessionMaxDuration: 600000,
     weightDelay: 600,
-    photoDelay: 300,           // ⚡ was 600
+    photoDelay: 300,
     calibrationDelay: 800,
     commandDelay: 100,
     resetHomeDelay: 1000,
@@ -287,6 +286,42 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
   const log = useCallback((message: string, type: 'info' | 'success' | 'error' | 'warn' | 'debug' | 'perf' | 'crusher' | 'camera' | 'detection' = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     console.log(`[${timestamp}] [${type.toUpperCase()}] ${message}`);
+  }, []);
+
+  // ============================================
+  // ✅ FIX: HELPER TO PARSE WEIGHT FROM RAW VALUE
+  // Same calibration logic used in both WS handler and HTTP fallback
+  // ============================================
+  const parseWeight = useCallback((rawValue: number) => {
+    const coefficient = config.weight.coefficients[1];
+    const calibratedWeight = rawValue * (coefficient / 1000);
+    return {
+      weight: Math.round(calibratedWeight * 10) / 10,
+      rawWeight: rawValue,
+      coefficient,
+      timestamp: new Date().toISOString(),
+    };
+  }, [config.weight.coefficients]);
+
+  // ============================================
+  // ✅ FIX: WAIT FOR WEIGHT WITH POLLING
+  // Polls stateRef.current.weight with timeout
+  // Matches how Node.js agent gets weight via WS
+  // ============================================
+  const waitForWeight = useCallback(async (timeoutMs: number = 2000): Promise<any> => {
+    const s = stateRef.current;
+    const pollInterval = 100;
+    let elapsed = 0;
+
+    while (elapsed < timeoutMs) {
+      if (s.weight !== null) {
+        return s.weight;
+      }
+      await delay(pollInterval);
+      elapsed += pollInterval;
+    }
+
+    return null; // timeout - weight never arrived
   }, []);
 
   // ============================================
@@ -454,7 +489,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            material: itemData.material,  // ✅ Send English enum (PLASTIC_BOTTLE, METAL_CAN) — backend materialTypeMap expects this
+            material: itemData.material,
             weight: itemData.weight,
             confidence: itemData.confidence / 100,
           }),
@@ -477,6 +512,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ============================================
   // HARDWARE CONTROL
+  // ✅ FIX: getWeight now parses HTTP response as fallback
   // ============================================
   const executeCommand = useCallback(async (action: string, params: any = {}) => {
     const deviceType = 1;
@@ -538,13 +574,12 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         signal: AbortSignal.timeout(config.local.timeout),
       });
 
-      // ✅ Log response status for debugging
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         log(`⚠️ ${action} HTTP ${response.status}: ${text.substring(0, 100)}`, 'warn');
       }
 
-      // ✅ Try to read response body — WorldLucky may return data in HTTP response
+      // ✅ FIX: Read response body ONCE
       let responseData: any = null;
       try {
         const text = await response.text();
@@ -556,10 +591,38 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         }
       } catch (_) { /* no JSON body */ }
 
+      // ✅ FIX: For getWeight - parse weight from HTTP response as fallback
+      // The Node.js agent relies on WS for weight, but browser WS may not receive it
+      // So we also try to extract weight from the HTTP response directly
+      if (action === 'getWeight' && responseData) {
+        const s = stateRef.current;
+        let rawWeight: number | null = null;
+
+        // Try multiple response formats the hardware might use
+        if (responseData.data !== undefined && responseData.data !== null) {
+          rawWeight = parseFloat(responseData.data) || 0;
+        } else if (responseData.weight !== undefined && responseData.weight !== null) {
+          rawWeight = parseFloat(responseData.weight) || 0;
+        } else if (responseData.value !== undefined && responseData.value !== null) {
+          rawWeight = parseFloat(responseData.value) || 0;
+        } else if (typeof responseData === 'number') {
+          rawWeight = responseData;
+        } else if (typeof responseData === 'string') {
+          rawWeight = parseFloat(responseData) || 0;
+        }
+
+        if (rawWeight !== null && rawWeight > 0) {
+          const parsed = parseWeight(rawWeight);
+          s.weight = parsed;
+          console.log(`[HTTP] ⚖️ Weight from HTTP response: ${parsed.weight}g (raw: ${rawWeight})`);
+        }
+      }
+
       if (action === 'takePhoto') await delay(config.timing.photoDelay);
       if (action === 'getWeight') {
-        log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting ${config.timing.weightDelay}ms for WS response`, 'debug');
-        await delay(config.timing.weightDelay);
+        log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting for WS/HTTP response`, 'debug');
+        // ✅ FIX: Don't add extra delay here - let the caller handle waiting
+        // The old code had delay here AND in scheduleNextPhoto causing double-delay
       }
 
       return responseData;
@@ -567,7 +630,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log(`❌ ${action} failed: ${err.message}`, 'error');
       throw err;
     }
-  }, [config, log]);
+  }, [config, log, parseWeight]);
 
   // ============================================
   // CONTINUOUS COMPACTOR MANAGEMENT
@@ -859,7 +922,12 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       recordItemToBackend, trackCycleTime, trackDetectionAttempt, resetInactivityTimer, log]);
 
   // ============================================
-  // PHOTO DETECTION WITH POSITIONING (⚡ OPTIMIZED)
+  // ✅ FIX: PHOTO DETECTION WITH POSITIONING
+  // Key changes:
+  // 1) Clear s.weight before getWeight call
+  // 2) Use waitForWeight() polling instead of fixed delay
+  // 3) HTTP response fallback handled in executeCommand
+  // 4) Matches Node.js agent flow exactly
   // ============================================
   const scheduleNextPhotoWithPositioning = useCallback(async () => {
     const s = stateRef.current;
@@ -882,19 +950,22 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       log('🔍 Checking weight for item presence...', 'info');
 
       try {
-        // Log WS state before calling getWeight
         const wsState = wsRef.current?.readyState;
         const wsStates = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
         log(`📡 WS state: ${wsStates[wsState ?? 3] || 'NULL'} | moduleId: ${moduleIdRef.current}`, 'debug');
 
-        // getWeight HTTP call triggers the measurement (includes internal 600ms delay)
-        // But the actual weight VALUE arrives via WebSocket (function '06')
-        // We need an EXTRA delay to let the WS response arrive and populate s.weight
-        await executeCommand('getWeight');
-        await delay(config.timing.weightDelay);  // ✅ Wait for WS response
+        // ✅ FIX: Clear weight BEFORE calling getWeight so we get a fresh reading
+        s.weight = null;
 
-        if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
-          log(`⚖️ No item detected (weight: ${s.weight ? s.weight.weight + 'g' : 'null'}) - waiting...`, 'debug');
+        // ✅ FIX: executeCommand('getWeight') now also sets s.weight from HTTP response as fallback
+        await executeCommand('getWeight');
+
+        // ✅ FIX: Poll for weight with timeout instead of fixed delay
+        // This handles both WS response AND HTTP fallback
+        const weightResult = await waitForWeight(2000);
+
+        if (!weightResult || weightResult.weight < config.detection.minValidWeight) {
+          log(`⚖️ No item detected (weight: ${weightResult ? weightResult.weight + 'g' : 'null'}) - waiting...`, 'debug');
           s.weight = null;
 
           if (s.autoCycleEnabled) {
@@ -903,7 +974,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           return;
         }
 
-        log(`✅ Item detected (${s.weight.weight}g) - proceeding to position`, 'success');
+        log(`✅ Item detected (${weightResult.weight}g) - proceeding to position`, 'success');
+        // ✅ FIX: Clear weight after successful check (same as Node.js agent)
         s.weight = null;
 
       } catch (err: any) {
@@ -919,7 +991,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       try {
         if (config.detection.positionBeforePhoto) {
-          // ⚡ Belt already stopped from above - go straight to positioning
           log('🔄 Moving belt to camera position...', 'info');
           await executeCommand('customMotor', config.motors.belt.toWeight);
           await delay(config.timing.beltToWeight);
@@ -949,8 +1020,8 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           await scheduleNextPhotoRef.current?.();
         }
       }
-    }, 500);  // ✅ Restored - 100ms was too aggressive for serial polling
-  }, [config, executeCommand, log]);
+    }, 500);
+  }, [config, executeCommand, waitForWeight, log]);
 
   // Keep refs updated for mutual recursion
   useEffect(() => { scheduleNextPhotoRef.current = scheduleNextPhotoWithPositioning; },
@@ -1153,7 +1224,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
       log('🎬 Starting GUEST session...', 'info');
 
-      // ✅ Uses dynamic device ID
       const url = `${config.backend.url}/api/rvm/${config.device.id}/guest/start`;
       log(`📡 Calling: ${url}`, 'info');
 
@@ -1401,14 +1471,17 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
   // ============================================
   // INITIALIZATION
+  // ✅ FIX: Enhanced WS message handling with better logging
   // ============================================
   const determineMaterialTypeRef = useRef(determineMaterialType);
   const executeCommandRef = useRef(executeCommand);
   const handleSessionTimeoutRef = useRef(handleSessionTimeout);
+  const parseWeightRef = useRef(parseWeight);
 
   useEffect(() => { determineMaterialTypeRef.current = determineMaterialType; }, [determineMaterialType]);
   useEffect(() => { executeCommandRef.current = executeCommand; }, [executeCommand]);
   useEffect(() => { handleSessionTimeoutRef.current = handleSessionTimeout; }, [handleSessionTimeout]);
+  useEffect(() => { parseWeightRef.current = parseWeight; }, [parseWeight]);
 
   // Single stable init — runs ONCE
   useEffect(() => {
@@ -1438,7 +1511,6 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       ws.onopen = () => {
         if (destroyed) return;
         console.log('[WS] ✅ WebSocket connected');
-        // moduleId hardcoded to 09 — no getModuleId call needed
         setIsReady(true);
         setStatus('ready');
         setStatusMessage('System ready');
@@ -1447,7 +1519,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
       ws.onmessage = async (event) => {
         if (destroyed) return;
         try {
-          // ✅ Browser WS may receive data as Blob, not string
+          // ✅ FIX: Handle all browser WS data types
           let rawData: string;
           if (typeof event.data === 'string') {
             rawData = event.data;
@@ -1459,12 +1531,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             rawData = String(event.data);
           }
           
-          console.log(`[WS] 📩 RAW: ${rawData.substring(0, 200)}`);
+          // ✅ FIX: Always log raw WS messages for debugging
+          console.log(`[WS] 📩 RAW: ${rawData.substring(0, 300)}`);
           
           const message = JSON.parse(rawData);
           const s = stateRef.current;
 
-          // ✅ Accept moduleId from WS - hardware knows the correct value
+          // ── Module ID from hardware ──
           if (message.function === '01') {
             const wsModuleId = message.moduleId;
             console.log(`[WS] ✅ Module ID from hardware: ${wsModuleId}`);
@@ -1494,40 +1567,45 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             if (s.autoCycleEnabled && s.awaitingDetection) {
               s.awaitingDetection = false;
               console.log('[WS] 🔍 AI detection complete - measuring weight...');
-              setTimeout(() => executeCommandRef.current('getWeight'), 100);  // ⚡ was 300ms
+              // ✅ FIX: Clear weight before requesting new measurement
+              s.weight = null;
+              setTimeout(() => executeCommandRef.current('getWeight'), 100);
             }
             return;
           }
 
           // ── Weight Result ──
+          // ✅ FIX: This handler ALWAYS sets s.weight when function '06' arrives
+          // regardless of whether aiResult exists or not
           if (message.function === '06') {
             const weightValue = parseFloat(message.data) || 0;
-            const coefficient = config.weight.coefficients[1];
-            const calibratedWeight = weightValue * (coefficient / 1000);
+            const parsed = parseWeightRef.current(weightValue);
 
-            s.weight = {
-              weight: Math.round(calibratedWeight * 10) / 10,
-              rawWeight: weightValue,
-              coefficient,
-              timestamp: new Date().toISOString(),
-            };
+            // ✅ FIX: ALWAYS set weight on state - this is the key fix
+            // The scheduleNextPhotoWithPositioning polls s.weight via waitForWeight()
+            // So weight must be set here for the polling to find it
+            s.weight = parsed;
 
-            console.log(`[WS] ⚖️ Weight: ${s.weight.weight}g`);
+            console.log(`[WS] ⚖️ Weight: ${parsed.weight}g (raw: ${weightValue})`);
 
-            if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
+            // Handle recalibration if weight is 0
+            if (parsed.weight <= 0 && s.calibrationAttempts < 2) {
               s.calibrationAttempts++;
+              console.log(`[WS] ⚖️ Zero weight - recalibrating (attempt ${s.calibrationAttempts})`);
               setTimeout(async () => {
                 await executeCommandRef.current('calibrateWeight');
                 setTimeout(() => executeCommandRef.current('getWeight'), config.timing.calibrationDelay);
-              }, 200);  // ⚡ was 500ms
+              }, 200);
               return;
             }
-            if (s.weight.weight > 0) s.calibrationAttempts = 0;
+            if (parsed.weight > 0) s.calibrationAttempts = 0;
 
+            // ✅ If AI result is ready AND auto cycle is on, proceed to cycle
+            // This matches the Node.js agent behavior exactly
             if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
-              console.log(`[WS] ⚖️ Final weight: ${s.weight.weight}g`);
+              console.log(`[WS] ⚖️ Final weight: ${parsed.weight}g`);
 
-              if (s.weight.weight < config.detection.minValidWeight) {
+              if (parsed.weight < config.detection.minValidWeight) {
                 console.log('[WS] ⚠️ Weight too low - skipping');
                 s.aiResult = null;
                 s.weight = null;
@@ -1539,13 +1617,13 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
               if (s.aiResult.materialType === 'UNKNOWN') {
                 console.log('[WS] ❌ Unknown material - rejecting');
                 s.cycleInProgress = true;
-                executeRejectionCycleRef.current?.();  // ⚡ no setTimeout
+                executeRejectionCycleRef.current?.();
                 return;
               }
 
               console.log('[WS] ✅ Starting auto cycle...');
               s.cycleInProgress = true;
-              executeAutoCycleRef.current?.();  // ⚡ no setTimeout
+              executeAutoCycleRef.current?.();
             }
             return;
           }
@@ -1588,11 +1666,11 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             return;
           }
 
-          // ✅ Log any unhandled WS messages for debugging
-          console.log(`[WS] 📨 Unhandled message: function=${message.function}, data=${JSON.stringify(message.data).substring(0, 100)}`);
+          // ✅ Log unhandled WS messages
+          console.log(`[WS] 📨 Unhandled: function=${message.function}, data=${JSON.stringify(message.data).substring(0, 100)}`);
 
         } catch (err: any) {
-          console.error(`[WS] ❌ Message error: ${err.message}`);
+          console.error(`[WS] ❌ Message parse error: ${err.message}`);
         }
       };
 
