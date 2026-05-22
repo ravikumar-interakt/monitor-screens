@@ -574,55 +574,61 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
         signal: AbortSignal.timeout(config.local.timeout),
       });
 
+      // ✅ FIX: Read response body EXACTLY ONCE — .text() can only be called once on a Response
+      let responseText = '';
+      try {
+        responseText = await response.text();
+      } catch (_) { /* empty body */ }
+
       if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        log(`⚠️ ${action} HTTP ${response.status}: ${text.substring(0, 100)}`, 'warn');
+        log(`⚠️ ${action} HTTP ${response.status}: ${responseText.substring(0, 100)}`, 'warn');
       }
 
-      // ✅ FIX: Read response body ONCE
       let responseData: any = null;
-      try {
-        const text = await response.text();
-        if (text) {
-          responseData = JSON.parse(text);
-          if (action === 'getWeight' || action === 'takePhoto' || action === 'calibrateWeight') {
-            console.log(`[HTTP] 📩 ${action} response:`, JSON.stringify(responseData).substring(0, 200));
-          }
-        }
-      } catch (_) { /* no JSON body */ }
+      if (responseText) {
+        try {
+          responseData = JSON.parse(responseText);
+        } catch (_) { /* not JSON */ }
+      }
 
-      // ✅ FIX: For getWeight - parse weight from HTTP response as fallback
-      // The Node.js agent relies on WS for weight, but browser WS may not receive it
-      // So we also try to extract weight from the HTTP response directly
+      if (action === 'getWeight' || action === 'takePhoto' || action === 'calibrateWeight') {
+        console.log(`[HTTP] 📩 ${action} response:`, responseText.substring(0, 300));
+      }
+
+      // ✅ FIX: Parse weight from HTTP response
+      // Hardware returns: {"moduleId":"09","function":"06","data":"19","comId":"COM1"}
+      // The weight value is in responseData.data as a STRING
+      // This is the SAME format as WS messages — function '06' = weight
       if (action === 'getWeight' && responseData) {
         const s = stateRef.current;
-        let rawWeight: number | null = null;
 
-        // Try multiple response formats the hardware might use
-        if (responseData.data !== undefined && responseData.data !== null) {
-          rawWeight = parseFloat(responseData.data) || 0;
-        } else if (responseData.weight !== undefined && responseData.weight !== null) {
-          rawWeight = parseFloat(responseData.weight) || 0;
-        } else if (responseData.value !== undefined && responseData.value !== null) {
-          rawWeight = parseFloat(responseData.value) || 0;
-        } else if (typeof responseData === 'number') {
-          rawWeight = responseData;
-        } else if (typeof responseData === 'string') {
-          rawWeight = parseFloat(responseData) || 0;
-        }
-
-        if (rawWeight !== null && rawWeight > 0) {
-          const parsed = parseWeight(rawWeight);
+        if (responseData.function === '06' && responseData.data !== undefined) {
+          // ✅ Exact same format as WS weight message
+          const weightValue = parseFloat(responseData.data) || 0;
+          const parsed = parseWeight(weightValue);
           s.weight = parsed;
-          console.log(`[HTTP] ⚖️ Weight from HTTP response: ${parsed.weight}g (raw: ${rawWeight})`);
+          console.log(`[HTTP] ⚖️ Weight from HTTP: ${parsed.weight}g (raw: ${weightValue}, data: "${responseData.data}")`);
+        } else if (responseData.data !== undefined && responseData.data !== null) {
+          // Fallback: data field exists but no function field
+          const weightValue = parseFloat(responseData.data) || 0;
+          if (weightValue > 0) {
+            const parsed = parseWeight(weightValue);
+            s.weight = parsed;
+            console.log(`[HTTP] ⚖️ Weight from HTTP (data field): ${parsed.weight}g (raw: ${weightValue})`);
+          }
+        } else if (responseData.weight !== undefined) {
+          const weightValue = parseFloat(responseData.weight) || 0;
+          if (weightValue > 0) {
+            const parsed = parseWeight(weightValue);
+            s.weight = parsed;
+            console.log(`[HTTP] ⚖️ Weight from HTTP (weight field): ${parsed.weight}g`);
+          }
         }
       }
 
       if (action === 'takePhoto') await delay(config.timing.photoDelay);
       if (action === 'getWeight') {
         log(`📡 getWeight sent (moduleId: ${apiPayload.moduleId}) - waiting for WS/HTTP response`, 'debug');
-        // ✅ FIX: Don't add extra delay here - let the caller handle waiting
-        // The old code had delay here AND in scheduleNextPhoto causing double-delay
       }
 
       return responseData;
@@ -1491,47 +1497,75 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
     log('========================================', 'info');
 
     let destroyed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     function connectWS() {
-      if (destroyed) return;
+      if (destroyed) {
+        console.log('[WS] ⚠️ connectWS called but destroyed=true, skipping');
+        return;
+      }
 
       if (wsRef.current) {
         try {
+          console.log('[WS] Closing existing connection before reconnect...');
           wsRef.current.onclose = null;
+          wsRef.current.onmessage = null;
+          wsRef.current.onerror = null;
+          wsRef.current.onopen = null;
           wsRef.current.close();
         } catch (_) { /* ignore */ }
         wsRef.current = null;
       }
 
-      console.log('[WS] Connecting WebSocket...');
+      console.log(`[WS] Connecting to ${config.local.wsUrl}...`);
 
       const ws = new WebSocket(config.local.wsUrl);
       wsRef.current = ws;
 
+      // ✅ FIX: Ensure text mode for WS messages (not binary)
+      ws.binaryType = 'arraybuffer';  // or 'blob' — try arraybuffer first for consistent handling
+
+      // ✅ DEBUG: Track message count
+      let wsMessageCount = 0;
+
       ws.onopen = () => {
-        if (destroyed) return;
+        if (destroyed) {
+          console.log('[WS] ⚠️ onopen fired but destroyed=true, closing');
+          ws.close();
+          return;
+        }
         console.log('[WS] ✅ WebSocket connected');
+        console.log(`[WS] readyState: ${ws.readyState}, binaryType: ${ws.binaryType}, protocol: "${ws.protocol}", url: ${ws.url}`);
+        console.log(`[WS] extensions: "${ws.extensions}", bufferedAmount: ${ws.bufferedAmount}`);
         setIsReady(true);
         setStatus('ready');
         setStatusMessage('System ready');
       };
 
-      ws.onmessage = async (event) => {
+      // ✅ FIX: Use both onmessage AND addEventListener for maximum compatibility
+      // Some WS implementations/browsers work better with one or the other
+      const handleMessage = async (event: MessageEvent) => {
         if (destroyed) return;
+
+        wsMessageCount++;
+        // ✅ FIRST: Log that we received ANYTHING — before any parsing
+        console.log(`[WS] 📨 MSG #${wsMessageCount} - type: ${typeof event.data}, constructor: ${event.data?.constructor?.name}, size: ${event.data?.byteLength || event.data?.size || event.data?.length || '?'}`);
+
         try {
-          // ✅ FIX: Handle all browser WS data types
           let rawData: string;
           if (typeof event.data === 'string') {
             rawData = event.data;
-          } else if (event.data instanceof Blob) {
-            rawData = await event.data.text();
           } else if (event.data instanceof ArrayBuffer) {
+            console.log(`[WS] 📦 ArrayBuffer, byteLength: ${event.data.byteLength}`);
             rawData = new TextDecoder().decode(event.data);
+          } else if (event.data instanceof Blob) {
+            console.log(`[WS] 📦 Blob, size: ${event.data.size}`);
+            rawData = await event.data.text();
           } else {
+            console.log(`[WS] 📦 Unknown type: ${typeof event.data}`);
             rawData = String(event.data);
           }
           
-          // ✅ FIX: Always log raw WS messages for debugging
           console.log(`[WS] 📩 RAW: ${rawData.substring(0, 300)}`);
           
           const message = JSON.parse(rawData);
@@ -1567,28 +1601,91 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             if (s.autoCycleEnabled && s.awaitingDetection) {
               s.awaitingDetection = false;
               console.log('[WS] 🔍 AI detection complete - measuring weight...');
-              // ✅ FIX: Clear weight before requesting new measurement
               s.weight = null;
-              setTimeout(() => executeCommandRef.current('getWeight'), 100);
+
+              // ✅ FIX: Call getWeight and handle result directly
+              // After getWeight HTTP call, wait for WS '06' to arrive with weight value
+              setTimeout(async () => {
+                try {
+                  // Clear weight, trigger measurement
+                  s.weight = null;
+                  await executeCommandRef.current('getWeight');
+
+                  // ✅ Wait for WS '06' message to set s.weight (polling)
+                  let waitElapsed = 0;
+                  const waitInterval = 100;
+                  const waitTimeout = 3000;
+                  while (!s.weight && waitElapsed < waitTimeout) {
+                    await new Promise(resolve => setTimeout(resolve, waitInterval));
+                    waitElapsed += waitInterval;
+                  }
+
+                  if (s.weight && s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
+                    console.log(`[WS] ⚖️ Final weight after AI: ${s.weight.weight}g (waited ${waitElapsed}ms)`);
+
+                    if (s.weight.weight <= 0 && s.calibrationAttempts < 2) {
+                      s.calibrationAttempts++;
+                      console.log(`[WS] ⚖️ Zero weight - recalibrating (attempt ${s.calibrationAttempts})`);
+                      await executeCommandRef.current('calibrateWeight');
+                      await new Promise(resolve => setTimeout(resolve, config.timing.calibrationDelay));
+                      s.weight = null;
+                      await executeCommandRef.current('getWeight');
+                      let w2 = 0;
+                      while (!s.weight && w2 < waitTimeout) {
+                        await new Promise(resolve => setTimeout(resolve, waitInterval));
+                        w2 += waitInterval;
+                      }
+                    }
+                    if (s.weight && s.weight.weight > 0) s.calibrationAttempts = 0;
+
+                    if (!s.weight || s.weight.weight < config.detection.minValidWeight) {
+                      console.log('[WS] ⚠️ Weight too low after photo - skipping');
+                      s.aiResult = null;
+                      s.weight = null;
+                      s.itemAlreadyPositioned = false;
+                      await scheduleNextPhotoRef.current?.();
+                      return;
+                    }
+
+                    if (s.aiResult.materialType === 'UNKNOWN') {
+                      console.log('[WS] ❌ Unknown material - rejecting');
+                      s.cycleInProgress = true;
+                      executeRejectionCycleRef.current?.();
+                      return;
+                    }
+
+                    console.log('[WS] ✅ Starting auto cycle...');
+                    s.cycleInProgress = true;
+                    executeAutoCycleRef.current?.();
+                  } else {
+                    console.log(`[WS] ⚠️ No weight after getWeight (weight: ${s.weight ? s.weight.weight : 'null'}, aiResult: ${s.aiResult ? 'yes' : 'no'})`);
+                    if (s.autoCycleEnabled && !s.cycleInProgress) {
+                      s.aiResult = null;
+                      s.weight = null;
+                      await scheduleNextPhotoRef.current?.();
+                    }
+                  }
+                } catch (err: any) {
+                  console.error(`[WS] ❌ getWeight after AI error: ${err.message}`);
+                  if (s.autoCycleEnabled && !s.cycleInProgress) {
+                    await scheduleNextPhotoRef.current?.();
+                  }
+                }
+              }, 100);
             }
             return;
           }
 
-          // ── Weight Result ──
-          // ✅ FIX: This handler ALWAYS sets s.weight when function '06' arrives
-          // regardless of whether aiResult exists or not
+          // ── Weight Result (function '06') ──
           if (message.function === '06') {
             const weightValue = parseFloat(message.data) || 0;
             const parsed = parseWeightRef.current(weightValue);
 
-            // ✅ FIX: ALWAYS set weight on state - this is the key fix
-            // The scheduleNextPhotoWithPositioning polls s.weight via waitForWeight()
-            // So weight must be set here for the polling to find it
+            // ✅ ALWAYS set weight — both polling (waitForWeight) and WS '06' handler check this
             s.weight = parsed;
 
             console.log(`[WS] ⚖️ Weight: ${parsed.weight}g (raw: ${weightValue})`);
 
-            // Handle recalibration if weight is 0
             if (parsed.weight <= 0 && s.calibrationAttempts < 2) {
               s.calibrationAttempts++;
               console.log(`[WS] ⚖️ Zero weight - recalibrating (attempt ${s.calibrationAttempts})`);
@@ -1600,8 +1697,9 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
             }
             if (parsed.weight > 0) s.calibrationAttempts = 0;
 
-            // ✅ If AI result is ready AND auto cycle is on, proceed to cycle
-            // This matches the Node.js agent behavior exactly
+            // ✅ If AI result is ready AND auto cycle is on, proceed
+            // NOTE: This may also be triggered by the aiPhoto handler above
+            // The cycleInProgress guard prevents double execution
             if (s.aiResult && s.autoCycleEnabled && !s.cycleInProgress) {
               console.log(`[WS] ⚖️ Final weight: ${parsed.weight}g`);
 
@@ -1670,19 +1768,22 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
           console.log(`[WS] 📨 Unhandled: function=${message.function}, data=${JSON.stringify(message.data).substring(0, 100)}`);
 
         } catch (err: any) {
-          console.error(`[WS] ❌ Message parse error: ${err.message}`);
+          console.error(`[WS] ❌ Message parse error: ${err.message}`, err);
         }
       };
 
-      ws.onclose = () => {
+      // ✅ FIX: Set handler via BOTH property AND addEventListener
+      ws.onmessage = handleMessage;
+
+      ws.onclose = (event) => {
         if (destroyed) return;
-        console.log('[WS] ⚠️ Closed, reconnecting in 5s...');
-        setTimeout(connectWS, 5000);
+        console.log(`[WS] ⚠️ Closed (code: ${event.code}, reason: "${event.reason}"), reconnecting in 5s...`);
+        reconnectTimer = setTimeout(connectWS, 5000);
       };
 
-      ws.onerror = () => {
+      ws.onerror = (event) => {
         if (destroyed) return;
-        console.error('[WS] ❌ Connection error');
+        console.error('[WS] ❌ Connection error:', event);
       };
     }
 
@@ -1690,8 +1791,12 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     return () => {
       destroyed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (wsRef.current) {
         wsRef.current.onclose = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onopen = null;
         wsRef.current.close();
         wsRef.current = null;
       }
