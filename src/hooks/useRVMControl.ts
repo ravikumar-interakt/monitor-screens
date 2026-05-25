@@ -783,7 +783,7 @@ export const useRVMControl = (config: RVMConfig = DEFAULT_CONFIG) => {
 
     if (s.sessionCode) {
       try {
-        await fetch(`${config.backend.url}/api/rvm/local/session/end`, {
+        await fetch(`${config.backend.url}/api/rvm/RVM-3102/local/session/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionCode: s.sessionCode, deviceId: config.device.id }),
